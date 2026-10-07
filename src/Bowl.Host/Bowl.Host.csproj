@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>Bowl.Host</AssemblyName>
+    <Authors>JusterZhu</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/GeneralLibrary/Bowl</RepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bowl.Host.Tests" />
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\protocol-v1.md" Link="protocol-v1.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

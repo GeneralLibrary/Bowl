@@ -1,0 +1,23 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet build Bowl.slnx -c Release
+      - run: dotnet test Bowl.slnx -c Release --no-build
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\Verify-Migration.ps1
+      - run: dotnet pack src/GeneralUpdate.Bowl/GeneralUpdate.Bowl.csproj -c Release --no-build -o artifacts/packages

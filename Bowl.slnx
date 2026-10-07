@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GeneralUpdate.Bowl/GeneralUpdate.Bowl.csproj" />
+    <Project Path="src/Bowl.Host/Bowl.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BowlTest/BowlTest.csproj" />
+    <Project Path="tests/Bowl.Host.Tests/Bowl.Host.Tests.csproj" />
+    <Project Path="tests/Bowl.TestPeer/Bowl.TestPeer.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,11 @@
+* text=auto
+*.exe binary
+*.rpm binary
+*.deb binary
+*.jpeg binary
+# Preserve original migration bytes, including the source's mixed line endings.
+LICENSE -text
+src/Directory.Build.props -text
+src/GeneralUpdate.Bowl/** -text
+tests/Directory.Packages.props -text
+tests/BowlTest/** -text
