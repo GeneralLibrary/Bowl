@@ -3,8 +3,8 @@ using GeneralUpdate.Bowl;
 /// <summary>
 /// 分支覆盖点：
 /// Normalize() 方法：
-///   - WorkModel 为空字符串 → 默认值 "Upgrade"
-///   - WorkModel 为 null → 默认值 "Upgrade"
+///   - WorkModel 为空字符串 → 默认值 "Normal"（恢复决策归 Core，AutoRestore 改为显式选择）
+///   - WorkModel 为 null → 默认值 "Normal"
 ///   - WorkModel 为有效值 → 保留原值
 ///   - TimeoutMs = 0 → 默认值 30000
 ///   - TimeoutMs &lt; 0 → 默认值 30000
@@ -73,11 +73,11 @@ public class BowlContextTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void Normalize_WorkModel为null或空_默认Upgrade(string? workModel)
+    public void Normalize_WorkModel为null或空_默认Normal(string? workModel)
     {
         var ctx = new BowlContext { WorkModel = workModel };
         var result = ctx.Normalize();
-        Assert.Equal("Upgrade", result.WorkModel);
+        Assert.Equal("Normal", result.WorkModel);
     }
 
     [Fact]
