@@ -14,17 +14,7 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_SuccessfulCommand_ReturnsExitCodeZero()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c exit 0",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var result = await ProcessRunner.RunAsync(psi, timeoutMs: 10000);
+        var result = await ProcessRunner.RunAsync(ShellExitZero(), timeoutMs: 10000);
 
         Assert.Equal(0, result.ExitCode);
     }
@@ -32,17 +22,7 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_NonZeroExitCode_ReturnsCorrectExitCode()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c exit 7",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var result = await ProcessRunner.RunAsync(psi, timeoutMs: 10000);
+        var result = await ProcessRunner.RunAsync(ShellExitSeven(), timeoutMs: 10000);
 
         Assert.Equal(7, result.ExitCode);
     }
@@ -54,17 +34,7 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_CapturesStandardOutput()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c echo ProcessRunnerTest",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var result = await ProcessRunner.RunAsync(psi, timeoutMs: 10000);
+        var result = await ProcessRunner.RunAsync(ShellEchoProcessRunnerTest(), timeoutMs: 10000);
 
         Assert.Contains(result.OutputLines, line => line.Contains("ProcessRunnerTest"));
     }
@@ -72,17 +42,7 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_OutputLines_IsNotNull()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c echo hello",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var result = await ProcessRunner.RunAsync(psi, timeoutMs: 10000);
+        var result = await ProcessRunner.RunAsync(ShellEchoHello(), timeoutMs: 10000);
 
         Assert.NotNull(result.OutputLines);
     }
@@ -114,18 +74,8 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_Timeout_ThrowsTimeoutException()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c ping -n 30 127.0.0.1 > nul",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
         await Assert.ThrowsAsync<TimeoutException>(
-            () => ProcessRunner.RunAsync(psi, timeoutMs: 500));
+            () => ProcessRunner.RunAsync(ShellBlocker(), timeoutMs: 500));
     }
 
     #endregion
@@ -135,20 +85,10 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_Cancellation_ThrowsOperationCanceledException()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c ping -n 30 127.0.0.1 > nul",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
         using var cts = new CancellationTokenSource(300);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ProcessRunner.RunAsync(psi, timeoutMs: 30000, cts.Token));
+            () => ProcessRunner.RunAsync(ShellBlocker(), timeoutMs: 30000, cts.Token));
     }
 
     #endregion
@@ -158,20 +98,53 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_ResultHasOutputLines()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "cmd",
-            Arguments = "/c echo line1 && echo line2",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        var result = await ProcessRunner.RunAsync(psi, timeoutMs: 10000);
+        var result = await ProcessRunner.RunAsync(ShellEchoLine(), timeoutMs: 10000);
 
         Assert.NotEmpty(result.OutputLines);
     }
 
     #endregion
+
+    // ---- OS-portable trivial processes ----
+
+    // Lifecycle tests only need processes that exit, echo, or sleep briefly. Both
+    // platform command lines are compile-time literals — nothing dynamic is ever
+    // interpolated — and POSIX sh takes the whole script as one quoted argument,
+    // so the same suite runs on Windows and Linux CI alike.
+    private static ProcessStartInfo ShellExitZero() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c exit 0")
+        : LiteralProcess("/bin/sh", "-c \"exit 0\"");
+
+    private static ProcessStartInfo ShellExitSeven() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c exit 7")
+        : LiteralProcess("/bin/sh", "-c \"exit 7\"");
+
+    private static ProcessStartInfo ShellEchoProcessRunnerTest() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c echo ProcessRunnerTest")
+        : LiteralProcess("/bin/sh", "-c \"echo ProcessRunnerTest\"");
+
+    private static ProcessStartInfo ShellEchoHello() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c echo hello")
+        : LiteralProcess("/bin/sh", "-c \"echo hello\"");
+
+    private static ProcessStartInfo ShellEchoLine() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c echo line1")
+        : LiteralProcess("/bin/sh", "-c \"echo line1\"");
+
+    private static ProcessStartInfo ShellBlocker() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd", "/c ping -n 30 127.0.0.1")
+        : LiteralProcess("/bin/sh", "-c \"sleep 30\"");
+
+    private static ProcessStartInfo LiteralProcess(string fileName, string arguments)
+    {
+        return new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+    }
 }
