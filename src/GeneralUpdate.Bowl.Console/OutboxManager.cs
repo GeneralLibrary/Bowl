@@ -89,9 +89,16 @@ internal sealed class OutboxManager
             writer.WriteString("state", "pending");
             writer.WriteNumber("attempts", 0);
             writer.WriteEndObject();
+            // Flush to disk before the atomic rename: the manifest is what makes a
+            // freshly captured crash case visible to the outbox sweep, and it is written
+            // precisely when the machine is least stable (post-crash). A torn manifest
+            // would orphan the case's dumps until GC deletes them. Mirrors Bowl.Host's
+            // Disk.Write durability.
+            stream.Flush(flushToDisk: true);
         }
 
-        File.Move(tempPath, manifestPath, overwrite: true);
+        if (File.Exists(manifestPath)) File.Delete(manifestPath);
+        File.Move(tempPath, manifestPath);
         GeneralTracer.Info($"OutboxManager: manifest written ({files.Count} file(s)) -> {manifestPath}.");
     }
 

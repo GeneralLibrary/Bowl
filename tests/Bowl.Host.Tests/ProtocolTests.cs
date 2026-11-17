@@ -1,5 +1,8 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
-using System.Diagnostics;
+using Microsoft.Win32.SafeHandles;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -202,16 +205,7 @@ public sealed class ProtocolTests
         File.WriteAllText(Path.Combine(outside, "keep.txt"), "safe");
         var link = Path.Combine(f.Request.BackupDirectory!, "linked");
         if (OperatingSystem.IsWindows())
-        {
-            var start = new ProcessStartInfo("cmd.exe")
-            {
-                UseShellExecute = false, RedirectStandardOutput = true,
-                Arguments = $"/c mklink /J \"{link}\" \"{outside}\""
-            };
-            using var command = Process.Start(start)!;
-            command.WaitForExit();
-            Assert.Equal(0, command.ExitCode);
-        }
+            CreateJunction(link, outside); // native junction — no shell, no mklink process
         else
             Directory.CreateSymbolicLink(link, outside);
         try
@@ -221,5 +215,55 @@ public sealed class ProtocolTests
             Assert.Equal("safe", File.ReadAllText(Path.Combine(outside, "keep.txt")));
         }
         finally { Directory.Delete(link); }
+    }
+
+    // ── Native junction creation ──────────────────────────────────────────
+
+    private const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
+    private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
+    private const uint GENERIC_READ = 0x80000000;
+    private const uint GENERIC_WRITE = 0x40000000;
+    private const uint OPEN_EXISTING = 3;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string fileName, uint desiredAccess,
+        FileShare shareMode, IntPtr securityAttributes, uint creationDisposition,
+        uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(SafeFileHandle device, uint ioControlCode,
+        byte[] inBuffer, uint inBufferSize, IntPtr outBuffer, uint outBufferSize,
+        out uint bytesReturned, IntPtr overlapped);
+
+    /// <summary>
+    ///     Creates a directory junction via FSCTL_SET_REPARSE_POINT — the same reparse
+    ///     point <c>mklink /J</c> produces, without spawning a shell in the test.
+    /// </summary>
+    private static void CreateJunction(string junctionPath, string targetPath)
+    {
+        Directory.CreateDirectory(junctionPath);
+        using var handle = CreateFile(junctionPath, GENERIC_READ | GENERIC_WRITE,
+            FileShare.None, IntPtr.Zero, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+        if (handle.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+
+        var substitute = Encoding.Unicode.GetBytes(@"\??\" + Path.GetFullPath(targetPath));
+        // Header: tag(4) + dataLength(2) + reserved(2); body: substitute offset(2) +
+        // substitute length(2) + print offset(2) + print length(2); then the path,
+        // followed by the empty print name's NUL plus 2 bytes of slack — the layout
+        // mklink itself produces.
+        var buffer = new byte[16 + substitute.Length + 4];
+        BitConverter.GetBytes(IO_REPARSE_TAG_MOUNT_POINT).CopyTo(buffer, 0);
+        BitConverter.GetBytes((ushort)(substitute.Length + 12)).CopyTo(buffer, 4);
+        BitConverter.GetBytes((ushort)substitute.Length).CopyTo(buffer, 10);
+        BitConverter.GetBytes((ushort)(substitute.Length + 2)).CopyTo(buffer, 12);
+        substitute.CopyTo(buffer, 16);
+
+        if (!DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer, (uint)buffer.Length,
+                IntPtr.Zero, 0, out _, IntPtr.Zero))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 }

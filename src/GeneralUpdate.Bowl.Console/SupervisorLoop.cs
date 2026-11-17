@@ -17,6 +17,9 @@ internal sealed class SupervisorLoop
 {
     private static readonly TimeSpan TargetPollInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>How often an active watch session checks for a pending stop signal.</summary>
+    private static readonly TimeSpan StopSignalPollInterval = TimeSpan.FromSeconds(5);
+
     private readonly WatchOptions _options;
     private readonly OutboxManager _outbox;
     private readonly IProcessWatcher _watcher;
@@ -40,53 +43,83 @@ internal sealed class SupervisorLoop
         _outbox.ClearStopSignal();
         _outbox.CollectGarbage();
 
-        var lastSeen = DateTime.UtcNow;
-        while (true)
+        // The main loop only checked the stop signal BETWEEN sessions, but a healthy watch
+        // session can run for days — `bowl stop` returned 0 while the watchdog kept running.
+        // Link the caller's token with a periodic stop-signal poll so an active session is
+        // interrupted too (every watcher layer consumes the token via WaitForExitAsync).
+        using var stopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var stopPoller = new Timer(_ =>
         {
-            ct.ThrowIfCancellationRequested();
-
-            if (_outbox.IsStopRequested())
+            try
             {
-                GeneralTracer.Info("SupervisorLoop: stop signal received — exiting gracefully (code 0).");
-                _outbox.ClearStopSignal();
-                return ExitCodes.Success;
+                if (_outbox.IsStopRequested())
+                    stopCts.Cancel();
             }
-
-            var target = FindTarget();
-            if (target == null)
+            catch (ObjectDisposedException)
             {
-                if (DateTime.UtcNow - lastSeen > _options.IdleExit)
+                // Timer callback raced loop disposal — nothing to do.
+            }
+        });
+        stopPoller.Change(TimeSpan.Zero, StopSignalPollInterval);
+
+        try
+        {
+            var lastSeen = DateTime.UtcNow;
+            while (true)
+            {
+                stopCts.Token.ThrowIfCancellationRequested();
+
+                if (_outbox.IsStopRequested())
                 {
-                    GeneralTracer.Info(
-                        $"SupervisorLoop: target absent for more than idle-exit ({_options.IdleExit}) — exiting (code 0).");
+                    GeneralTracer.Info("SupervisorLoop: stop signal received — exiting gracefully (code 0).");
+                    _outbox.ClearStopSignal();
                     return ExitCodes.Success;
                 }
 
-                await Task.Delay(TargetPollInterval, ct);
-                continue;
-            }
+                var target = FindTarget();
+                if (target == null)
+                {
+                    if (DateTime.UtcNow - lastSeen > _options.IdleExit)
+                    {
+                        GeneralTracer.Info(
+                            $"SupervisorLoop: target absent for more than idle-exit ({_options.IdleExit}) — exiting (code 0).");
+                        return ExitCodes.Success;
+                    }
 
-            // Target found — the idle window is irrelevant until it disappears again.
-            lastSeen = DateTime.UtcNow;
+                    await Task.Delay(TargetPollInterval, stopCts.Token);
+                    continue;
+                }
 
-            var session = await SuperviseSessionAsync(target, ct);
-            if (session.Crash)
-            {
-                await CollectEvidenceAsync(session, ct);
-                RunOnCrashHook(session.Directory);
-                _outbox.CollectGarbage(); // crash produced a case — enforce retention now
-            }
-            else
-            {
-                // Normal exit produces no evidence (§2.3); the pre-created session directory
-                // must not linger and masquerade as a pending case.
-                _outbox.RemoveSessionIfEmpty(session.Directory);
-                GeneralTracer.Info(
-                    $"SupervisorLoop: target exited normally (code {session.Outcome.TargetExitCode}) — no evidence, re-arming.");
-            }
+                // Target found — the idle window is irrelevant until it disappears again.
+                lastSeen = DateTime.UtcNow;
 
-            // Re-arm: the loop continues and re-attaches when the user restarts the app.
-            lastSeen = DateTime.UtcNow;
+                var session = await SuperviseSessionAsync(target, stopCts.Token);
+                if (session.Crash)
+                {
+                    await CollectEvidenceAsync(session, stopCts.Token);
+                    RunOnCrashHook(session.Directory);
+                    _outbox.CollectGarbage(); // crash produced a case — enforce retention now
+                }
+                else
+                {
+                    // Normal exit produces no evidence (§2.3); the pre-created session directory
+                    // must not linger and masquerade as a pending case.
+                    _outbox.RemoveSessionIfEmpty(session.Directory);
+                    GeneralTracer.Info(
+                        $"SupervisorLoop: target exited normally (code {session.Outcome.TargetExitCode}) — no evidence, re-arming.");
+                }
+
+                // Re-arm: the loop continues and re-attaches when the user restarts the app.
+                lastSeen = DateTime.UtcNow;
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Cancellation came from the stop-signal poller, not the host process: unwind
+            // the interrupted session gracefully and honour the stop request.
+            GeneralTracer.Info("SupervisorLoop: stop signal interrupted the active session — exiting gracefully (code 0).");
+            _outbox.ClearStopSignal();
+            return ExitCodes.Success;
         }
     }
 
@@ -111,6 +144,13 @@ internal sealed class SupervisorLoop
                 // Touch the handle: an exited-between-enumeration process throws here and
                 // must not be selected as the watch target.
                 _ = candidate.Id;
+                // Release the handles of the not-selected siblings before returning — a
+                // long-lived watchdog leaks one process handle per session otherwise.
+                foreach (var other in candidates)
+                {
+                    if (!ReferenceEquals(other, candidate))
+                        other.Dispose();
+                }
                 return candidate;
             }
             catch
@@ -143,6 +183,9 @@ internal sealed class SupervisorLoop
         }
         catch (OperationCanceledException)
         {
+            // The session was interrupted (stop signal / shutdown): the pre-created
+            // session directory holds no evidence and must not linger as a look-alike case.
+            _outbox.RemoveSessionIfEmpty(sessionDirectory);
             throw;
         }
         catch (Exception ex)
@@ -222,9 +265,13 @@ internal sealed class SupervisorLoop
     // ── Advanced hook ───────────────────────────────────────────────────
 
     /// <summary>
-    ///     Runs the optional <c>--on-crash</c> external command with the evidence directory
-    ///     appended as an argument (replaces the removed AutoRestore: users wire their own
-    ///     restore script and own the risk). Failures are logged, never propagated — the
+    ///     Activates the optional <c>--on-crash</c> hook. The executed script is the
+    ///     fixed-name <c>on-crash.cmd</c> / <c>on-crash.sh</c> deployed next to the
+    ///     watchdog; the evidence directory travels via the <c>on-crash.pointer</c>
+    ///     file, never as a command-line argument — the command line stays fully
+    ///     literal, so operator data is never interpolated into a process command
+    ///     line. (Replaces the removed AutoRestore: users wire their own restore
+    ///     script and own the risk.) Failures are logged, never propagated — the
     ///     evidence is already safely on disk.
     /// </summary>
     private void RunOnCrashHook(string evidenceDirectory)
@@ -234,28 +281,47 @@ internal sealed class SupervisorLoop
         try
         {
             var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-            var startInfo = isWindows
-                ? new ProcessStartInfo("cmd.exe", $"/c {_onCrashCommand} \"{evidenceDirectory}\"")
-                : new ProcessStartInfo("/bin/sh", $"-c {_onCrashCommand} \"{evidenceDirectory}\"");
-            startInfo.UseShellExecute = false;
-            startInfo.CreateNoWindow = true;
-
-            GeneralTracer.Info($"SupervisorLoop: on-crash hook starting: {_onCrashCommand}");
-            using var process = Process.Start(startInfo);
-            if (process == null)
+            var hookScript = Path.Combine(AppContext.BaseDirectory,
+                isWindows ? "on-crash.cmd" : "on-crash.sh");
+            if (!File.Exists(hookScript))
             {
-                GeneralTracer.Warn("SupervisorLoop: on-crash hook could not be started.");
+                GeneralTracer.Warn(
+                    $"SupervisorLoop: on-crash hook script not found at {hookScript} — hook not run.");
                 return;
             }
 
-            if (!process.WaitForExit(60_000))
+            // The hook reads the evidence directory from the pointer file (its own
+            // directory), so the command line below carries zero operator data.
+            File.WriteAllText(
+                Path.Combine(AppContext.BaseDirectory, "on-crash.pointer"), evidenceDirectory);
+
+            GeneralTracer.Info($"SupervisorLoop: on-crash hook starting ({_onCrashCommand}).");
+            var previousDirectory = Environment.CurrentDirectory;
+            try
             {
-                process.Kill();
-                GeneralTracer.Warn("SupervisorLoop: on-crash hook timed out after 60s and was killed.");
+                Environment.CurrentDirectory = AppContext.BaseDirectory;
+                using var process = isWindows
+                    ? Process.Start("cmd.exe", "/c on-crash.cmd")
+                    : Process.Start("/bin/sh", "on-crash.sh");
+                if (process == null)
+                {
+                    GeneralTracer.Warn("SupervisorLoop: on-crash hook could not be started.");
+                    return;
+                }
+
+                if (!process.WaitForExit(60_000))
+                {
+                    process.Kill();
+                    GeneralTracer.Warn("SupervisorLoop: on-crash hook timed out after 60s and was killed.");
+                }
+                else
+                {
+                    GeneralTracer.Info($"SupervisorLoop: on-crash hook finished (code {process.ExitCode}).");
+                }
             }
-            else
+            finally
             {
-                GeneralTracer.Info($"SupervisorLoop: on-crash hook finished (code {process.ExitCode}).");
+                Environment.CurrentDirectory = previousDirectory;
             }
         }
         catch (Exception ex)

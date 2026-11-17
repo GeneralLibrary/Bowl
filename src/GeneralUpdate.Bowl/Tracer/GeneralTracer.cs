@@ -22,8 +22,20 @@ public static class GeneralTracer
         }
 
         Trace.Listeners.Add(new TextWriterTraceListener(Console.Out) { Name = "ConsoleListener" });
-        
-        InitializeFileListener();
+
+        // A read-only install location (e.g. the watchdog deployed under
+        // "C:\Program Files" run by a standard user) cannot create its log directory;
+        // a failing static constructor would be a TypeInitializationException on the
+        // very first trace call and take the whole process down. Degrade to console
+        // logging instead.
+        try
+        {
+            InitializeFileListener();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
+        }
 
         if (Debugger.IsAttached)
             Trace.Listeners.Add(new DefaultTraceListener());
@@ -31,7 +43,7 @@ public static class GeneralTracer
         Trace.AutoFlush = true;
         _isTracingEnabled = true;
     }
-    
+
     private static void InitializeFileListener()
     {
         //Ensure that log files are rotated on a daily basis

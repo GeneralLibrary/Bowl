@@ -22,14 +22,15 @@ public class WindowsBowlStrategyTests
     private BowlContext CreateContext(
         string processName = "test.exe",
         DumpType dumpType = DumpType.Full,
-        string? dumpFileName = "crash.dmp")
+        string? dumpFileName = "crash.dmp",
+        string? targetPath = null)
     {
         return new BowlContext
         {
             ProcessNameOrId = processName,
             DumpFileName = dumpFileName,
             FailFileName = "crash.json",
-            TargetPath = Path.GetTempPath(),
+            TargetPath = targetPath ?? Path.GetTempPath(),
             FailDirectory = Path.Combine(Path.GetTempPath(), "fail", "test"),
             BackupDirectory = Path.Combine(Path.GetTempPath(), "backup", "test"),
             WorkModel = "Upgrade",
@@ -187,5 +188,91 @@ public class WindowsBowlStrategyTests
 
         Assert.Equal(Task.CompletedTask, task);
         await task; // Should complete immediately
+    }
+
+    /// <summary>
+    /// 串行化守卫：procdump 解析测试要读写 <c>AppContext.BaseDirectory</c> 下的固定路径
+    /// （Applications\Windows\procdump64.exe），与其它测试并行写同一文件会互相干扰。
+    /// </summary>
+    private static readonly object ProcdumpResolutionLock = new();
+
+    [Fact]
+    public void Prepare_仅TargetPath有procdump_解析到TargetPath回退路径()
+    {
+        // 独立安装形态下 tier 探测在 watchdog 自身目录（BaseDirectory）进行；若
+        // procdump 实际只存在于被监控应用的安装目录，Prepare 必须回退到该路径，
+        // 否则每次启动采集工具都会失败（此前只解析 TargetPath 一处，独立部署时
+        // 反过来失败——本次修复让两处都能解析）。
+        lock (ProcdumpResolutionLock)
+        {
+            var targetRoot = Path.Combine(Path.GetTempPath(), $"bowl-procdump-{Guid.NewGuid():N}");
+            var baseDirFile = Path.Combine(AppContext.BaseDirectory, "Applications", "Windows", "procdump64.exe");
+            var targetDirFile = Path.Combine(targetRoot, "Applications", "Windows", "procdump64.exe");
+            var backupFile = baseDirFile + ".test-backup";
+            var baseExisted = File.Exists(baseDirFile);
+            try
+            {
+                // 模拟“独立安装、BaseDirectory 无 procdump”的官方部署形态：先移走
+                // 测试环境自带的副本，测试结束后恢复。
+                if (baseExisted)
+                    File.Move(baseDirFile, backupFile);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(targetDirFile)!);
+                File.WriteAllBytes(targetDirFile, new byte[] { 0x4D, 0x5A });
+
+                var ctx = CreateContext(targetPath: targetRoot);
+                var startInfo = new WindowsBowlStrategy().Prepare(ctx);
+
+                Assert.NotNull(startInfo);
+                Assert.Equal(NormalizePath(targetDirFile), NormalizePath(startInfo!.FileName));
+            }
+            finally
+            {
+                if (baseExisted && File.Exists(backupFile))
+                {
+                    try { File.Move(backupFile, baseDirFile); } catch { /* best effort */ }
+                }
+                else
+                {
+                    // Only remove what this test created — the Applications\Windows
+                    // directory under BaseDirectory also hosts export.bat for the
+                    // SystemInfoProvider tests, so nuking the whole directory from a
+                    // parallel test run breaks them.
+                    try { if (File.Exists(baseDirFile)) File.Delete(baseDirFile); } catch { /* best effort */ }
+                }
+                try { Directory.Delete(targetRoot, recursive: true); } catch { /* best effort */ }
+            }
+        }
+    }
+
+    [Fact]
+    public void Prepare_BaseDirectory有procdump_优先于TargetPath()
+    {
+        // 独立安装语义：tier 探测在 watchdog 目录命中后，Prepare 必须解析同一位置，
+        // 保证探测与启动用的二进制一致。
+        lock (ProcdumpResolutionLock)
+        {
+            var baseDirFile = Path.Combine(AppContext.BaseDirectory, "Applications", "Windows", "procdump64.exe");
+            var targetRoot = Path.Combine(Path.GetTempPath(), $"bowl-procdump-{Guid.NewGuid():N}");
+            var targetDirFile = Path.Combine(targetRoot, "Applications", "Windows", "procdump64.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(baseDirFile)!);
+            try
+            {
+                File.WriteAllBytes(baseDirFile, new byte[] { 0x4D, 0x5A });
+                Directory.CreateDirectory(Path.GetDirectoryName(targetDirFile)!);
+                File.WriteAllBytes(targetDirFile, new byte[] { 0x4D, 0x5A });
+
+                var ctx = CreateContext(targetPath: targetRoot);
+                var startInfo = new WindowsBowlStrategy().Prepare(ctx);
+
+                Assert.NotNull(startInfo);
+                Assert.Equal(NormalizePath(baseDirFile), NormalizePath(startInfo!.FileName));
+            }
+            finally
+            {
+                try { if (File.Exists(baseDirFile)) File.Delete(baseDirFile); } catch { /* best effort */ }
+                try { Directory.Delete(targetRoot, recursive: true); } catch { /* best effort */ }
+            }
+        }
     }
 }

@@ -217,6 +217,8 @@ internal sealed class WatchOptions
                     case "idleExit" when property.Value.ValueKind == JsonValueKind.String:
                         if (TimeSpan.TryParse(property.Value.GetString(), CultureInfo.InvariantCulture, out var idle))
                             options.IdleExit = idle;
+                        else
+                            errors.Add($"Config 'idleExit' value '{property.Value.GetString()}' is not a valid TimeSpan: {path}.");
                         break;
                     case "onCrash" when property.Value.ValueKind == JsonValueKind.String:
                         options.OnCrash = property.Value.GetString(); break;

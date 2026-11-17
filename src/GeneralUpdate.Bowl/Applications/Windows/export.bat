@@ -1,12 +1,15 @@
 @echo off
 setlocal
 
-if "%~1"=="" (
-    echo Please provide the export path as the first parameter.
-    exit /b 1
-)
+rem Output directory: passed as %1 (manual use), or read from export.pointer next
+rem to this script (watchdog use — the pointer carries the crash-evidence path so
+rem the spawning process never builds a dynamic command line).
+set "exportDir=%~1"
+if "%~1"=="" set /p exportDir=<"%~dp0export.pointer"
 
-set exportDir=%~1
+if not exist "%exportDir%" (
+    mkdir "%exportDir%"
+)
 
 if not exist "%exportDir%" (
     mkdir "%exportDir%"

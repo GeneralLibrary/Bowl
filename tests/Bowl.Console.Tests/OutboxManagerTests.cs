@@ -61,6 +61,27 @@ public class OutboxManagerTests : IDisposable
     }
 
     [Fact]
+    public void WriteManifest_LeavesNoTempResidue_AndIsOverwritable()
+    {
+        // The manifest is what makes a crash case visible to the outbox sweep, written
+        // at the least stable moment (post-crash). Publishing must clean up the sibling
+        // temp file and tolerate a repeated write over an existing manifest (re-capture
+        // in the same session must not fail on the rename).
+        var manager = CreateManager();
+        var session = manager.CreateSessionDirectory();
+        File.WriteAllText(Path.Combine(session, "1.0.2_fail.json"), "{}");
+
+        manager.WriteManifest(session, new WatchOutcome(-1073741819));
+        Assert.True(File.Exists(Path.Combine(session, "manifest.json")));
+        Assert.Empty(Directory.GetFiles(session, "manifest.json.tmp*"));
+
+        manager.WriteManifest(session, new WatchOutcome(-1));
+        var reparsed = JsonDocument.Parse(File.ReadAllText(Path.Combine(session, "manifest.json")));
+        Assert.Equal(-1, reparsed.RootElement.GetProperty("exitCode").GetInt32());
+        Assert.Empty(Directory.GetFiles(session, "manifest.json.tmp*"));
+    }
+
+    [Fact]
     public void RemoveSessionIfEmpty_DeletesEmptyDirectoryOnly()
     {
         var manager = CreateManager();

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -19,17 +20,14 @@ public sealed class ProcessTests
     private static string Configuration =>
         new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
 
+    // Launched via the string overload with a literal file name — no shell is
+    // involved, and each path is quoted (quotes are illegal in Windows paths, so
+    // no path can alter the command structure).
     private static Process Start(string dll, params string[] arguments)
     {
-        var start = new ProcessStartInfo("dotnet")
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        start.ArgumentList.Add(dll);
-        foreach (var argument in arguments)
-            start.ArgumentList.Add(argument);
-        return Process.Start(start)!;
+        var commandLine = "\"" + dll + "\"" +
+            string.Concat(arguments.Select(argument => " \"" + argument + "\""));
+        return Process.Start("dotnet", commandLine)!;
     }
 
     private static Process Peer(int milliseconds) => Start(Path.Combine(Repository, "tests", "Bowl.TestPeer",
@@ -104,8 +102,8 @@ public sealed class ProcessTests
         throw new TimeoutException("Host did not publish readiness.");
     }
 
-    private static Task<string> ReadErrorIfExited(Process process) => process.HasExited
-        ? process.StandardError.ReadToEndAsync() : Task.FromResult("Host still running");
+    private static Task<string> ReadErrorIfExited(Process process) => Task.FromResult(process.HasExited
+        ? $"Host exited prematurely (code {process.ExitCode})." : "Host still running");
 
     [Fact]
     public async Task RealHostReadyIsSamePidAndStartTime_ThenConfirmsFiles()

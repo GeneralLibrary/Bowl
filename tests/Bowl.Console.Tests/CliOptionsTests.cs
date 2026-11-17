@@ -123,6 +123,34 @@ public class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void Parse_InvalidIdleExitInConfig_ReportsError()
+    {
+        // Regression: an unparseable bowl.json idleExit used to be silently ignored —
+        // the operator believed the setting was active while the default applied. The
+        // config path must surface the same error treatment the CLI flag gets.
+        var configPath = WriteConfig(
+            "{\"schema\":2,\"targetName\":\"MyApp\",\"installPath\":\"D:\\\\apps\",\"version\":\"1.0.2\",\"idleExit\":\"not-a-timespan\"}");
+
+        var options = WatchOptions.Parse(new[] { "--config", configPath }, out var errors);
+
+        Assert.Null(options);
+        Assert.Contains(errors, e => e.Contains("idleExit") && e.Contains("not-a-timespan"));
+    }
+
+    [Fact]
+    public void Parse_ValidIdleExitInConfig_StillAccepted()
+    {
+        var configPath = WriteConfig(
+            "{\"schema\":2,\"targetName\":\"MyApp\",\"installPath\":\"D:\\\\apps\",\"version\":\"1.0.2\",\"idleExit\":\"00:45:00\"}");
+
+        var options = WatchOptions.Parse(new[] { "--config", configPath }, out var errors);
+
+        Assert.NotNull(options);
+        Assert.Empty(errors);
+        Assert.Equal(TimeSpan.FromMinutes(45), options!.IdleExit);
+    }
+
+    [Fact]
     public void Parse_UnknownOption_Refused()
     {
         var options = WatchOptions.Parse(new[]
