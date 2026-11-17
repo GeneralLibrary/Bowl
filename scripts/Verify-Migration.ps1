@@ -6,11 +6,19 @@ try {
         'src/GeneralUpdate.Bowl/BowlBootstrap.cs',
         'src/GeneralUpdate.Bowl/BowlResult.cs',
         'src/GeneralUpdate.Bowl/BowlContext.cs',
+        'src/GeneralUpdate.Bowl/Applications/Windows/export.bat',
+        'src/GeneralUpdate.Bowl/Internal/WindowsSystemInfoProvider.cs',
+        'src/GeneralUpdate.Bowl/Strategies/WindowsBowlStrategy.cs',
         'src/GeneralUpdate.Bowl/Strategies/StrategyFactory.cs',
+        'src/GeneralUpdate.Bowl/Tracer/GeneralTracer.cs',
         'tests/BowlTest/README.md',
         'tests/BowlTest/BowlContextTests.cs',
         'tests/BowlTest/Strategies/BowlContextTests.cs',
-        'tests/BowlTest/Integration/BowlIntegrationTests.cs'
+        'tests/BowlTest/Integration/BowlIntegrationTests.cs',
+        'tests/BowlTest/BowlTests.cs',
+        'tests/BowlTest/Integration/BowlCrashPipelineTests.cs',
+        'tests/BowlTest/Strategies/ProcessRunnerTests.cs',
+        'tests/BowlTest/Strategies/WindowsBowlStrategyTests.cs'
     )
     $manifest = @(Import-Csv 'docs\migration-manifest.csv')
     if ($manifest.Count -ne 61) { throw 'Expected 61 original migration entries.' }
