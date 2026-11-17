@@ -10,6 +10,14 @@ internal interface IProcesses
 
 internal sealed class Processes : IProcesses
 {
+    // On Linux, Process.StartTime is recomputed on every read as boot-time plus
+    // /proc ticks, and the boot-time estimate (second-resolution uptime) carries
+    // up to ~1s of jitter between reads — an exact comparison across two reads
+    // false-negatives even for the same live process. Windows kernel timestamps
+    // are exact, so equality stays strict there.
+    private static readonly bool ExactTimestamps = OperatingSystem.IsWindows();
+    private static readonly TimeSpan StartJitter = TimeSpan.FromSeconds(2);
+
     public bool IsAlive(ProcessIdentity identity)
     {
         using var process = Find(identity);
@@ -25,7 +33,7 @@ internal sealed class Processes : IProcesses
         catch (ArgumentException) { return null; } // The PID no longer exists.
         try
         {
-            if (process.HasExited || process.StartTime.ToUniversalTime() != identity.StartTimeUtc.UtcDateTime)
+            if (process.HasExited || !SameProcessStart(process.StartTime.ToUniversalTime(), identity.StartTimeUtc))
             {
                 process.Dispose();
                 return null;
@@ -37,6 +45,14 @@ internal sealed class Processes : IProcesses
             process.Dispose();
             throw; // Access denied is NOT evidence of process exit.
         }
+    }
+
+    internal static bool SameProcessStart(DateTimeOffset observed, DateTimeOffset recorded)
+    {
+        var difference = observed - recorded;
+        return ExactTimestamps
+            ? difference == TimeSpan.Zero
+            : Math.Abs(difference.TotalSeconds) <= StartJitter.TotalSeconds;
     }
 
     public async Task StopAsync(ProcessIdentity identity, CancellationToken token)

@@ -115,7 +115,12 @@ public sealed class ProcessTests
         try
         {
             var ready = await Ready(f, host);
-            Assert.Equal(Identity(host), ready.Host);
+            // On Linux, Process.StartTime is re-derived per read with ~1s of boot-time
+            // jitter, so the identity is compared with a tolerance off Windows.
+            Assert.Equal(host.Id, ready.Host.Pid);
+            var startDrift = Math.Abs((ready.Host.StartTimeUtc - Identity(host).StartTimeUtc).TotalSeconds);
+            Assert.True(startDrift <= 2,
+                $"Host start time drifted by {startDrift:F3}s: {ready.Host.StartTimeUtc} vs {Identity(host).StartTimeUtc}.");
             Assert.Equal(f.Request.AttemptId, ready.AttemptId);
             f.Producer("completed");
             await Wait(host);

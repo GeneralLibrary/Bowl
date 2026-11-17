@@ -258,9 +258,9 @@ public class WindowsBowlStrategyTests
             Directory.CreateDirectory(Path.GetDirectoryName(baseDirFile)!);
             try
             {
-                File.WriteAllBytes(baseDirFile, new byte[] { 0x4D, 0x5A });
+                WriteStubExecutable(baseDirFile);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetDirFile)!);
-                File.WriteAllBytes(targetDirFile, new byte[] { 0x4D, 0x5A });
+                WriteStubExecutable(targetDirFile);
 
                 var ctx = CreateContext(targetPath: targetRoot);
                 var startInfo = new WindowsBowlStrategy().Prepare(ctx);
@@ -272,6 +272,25 @@ public class WindowsBowlStrategyTests
             {
                 try { if (File.Exists(baseDirFile)) File.Delete(baseDirFile); } catch { /* best effort */ }
                 try { Directory.Delete(targetRoot, recursive: true); } catch { /* best effort */ }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     写入假 MZ 头文件：杀软实时扫描会短暂占用刚落盘的可执行文件，写入需重试。
+    /// </summary>
+    private static void WriteStubExecutable(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.WriteAllBytes(path, new byte[] { 0x4D, 0x5A });
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(250);
             }
         }
     }
