@@ -11,6 +11,7 @@ try {
         'src/GeneralUpdate.Bowl/Strategies/WindowsBowlStrategy.cs',
         'src/GeneralUpdate.Bowl/Strategies/StrategyFactory.cs',
         'src/GeneralUpdate.Bowl/Tracer/GeneralTracer.cs',
+        'src/GeneralUpdate.Bowl/Tracer/TextTraceListener.cs',
         'tests/BowlTest/README.md',
         'tests/BowlTest/BowlContextTests.cs',
         'tests/BowlTest/Strategies/BowlContextTests.cs',

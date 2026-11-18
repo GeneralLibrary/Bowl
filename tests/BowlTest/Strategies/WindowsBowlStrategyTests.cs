@@ -256,6 +256,7 @@ public class WindowsBowlStrategyTests
             var targetRoot = Path.Combine(Path.GetTempPath(), $"bowl-procdump-{Guid.NewGuid():N}");
             var targetDirFile = Path.Combine(targetRoot, "Applications", "Windows", "procdump64.exe");
             Directory.CreateDirectory(Path.GetDirectoryName(baseDirFile)!);
+            var originalBytes = File.Exists(baseDirFile) ? File.ReadAllBytes(baseDirFile) : null;
             try
             {
                 WriteStubExecutable(baseDirFile);
@@ -270,7 +271,10 @@ public class WindowsBowlStrategyTests
             }
             finally
             {
-                try { if (File.Exists(baseDirFile)) File.Delete(baseDirFile); } catch { /* best effort */ }
+                if (originalBytes != null)
+                    File.WriteAllBytes(baseDirFile, originalBytes);
+                else if (File.Exists(baseDirFile))
+                    File.Delete(baseDirFile);
                 try { Directory.Delete(targetRoot, recursive: true); } catch { /* best effort */ }
             }
         }

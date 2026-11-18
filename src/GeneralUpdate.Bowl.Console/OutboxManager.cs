@@ -64,41 +64,52 @@ internal sealed class OutboxManager
         var files = Directory.Exists(sessionDirectory)
             ? Directory.GetFiles(sessionDirectory)
                 .Select(Path.GetFileName)
-                .Where(n => n != null && !n.Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
+                .Where(n => n != null && !n.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
+                    && !n.Equals("manifest.json.tmp", StringComparison.OrdinalIgnoreCase))
                 .Cast<string>()
                 .ToList()
             : new List<string>();
 
         var manifestPath = Path.Combine(sessionDirectory, "manifest.json");
         var tempPath = manifestPath + ".tmp";
-        using (var stream = File.Create(tempPath))
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        try
         {
-            writer.WriteStartObject();
-            writer.WriteNumber("schema", WatchOptions.SupportedSchema);
-            writer.WriteString("guid", Path.GetFileName(sessionDirectory));
-            writer.WriteString("kind", "crash");
-            writer.WriteString("targetName", _options.TargetName);
-            writer.WriteString("version", _options.Version);
-            writer.WriteNumber("exitCode", outcome.TargetExitCode);
-            writer.WriteString("createdAtUtc", DateTime.UtcNow);
-            writer.WriteStartArray("files");
-            foreach (var file in files)
-                writer.WriteStringValue(file);
-            writer.WriteEndArray();
-            writer.WriteString("state", "pending");
-            writer.WriteNumber("attempts", 0);
-            writer.WriteEndObject();
-            // Flush to disk before the atomic rename: the manifest is what makes a
-            // freshly captured crash case visible to the outbox sweep, and it is written
-            // precisely when the machine is least stable (post-crash). A torn manifest
-            // would orphan the case's dumps until GC deletes them. Mirrors Bowl.Host's
-            // Disk.Write durability.
-            stream.Flush(flushToDisk: true);
-        }
+            using (var stream = File.Create(tempPath))
+            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("schema", WatchOptions.SupportedSchema);
+                writer.WriteString("guid", Path.GetFileName(sessionDirectory));
+                writer.WriteString("kind", "crash");
+                writer.WriteString("targetName", _options.TargetName);
+                writer.WriteString("version", _options.Version);
+                if (outcome.TargetExitCode is int exitCode)
+                    writer.WriteNumber("exitCode", exitCode);
+                else
+                    writer.WriteNull("exitCode");
+                writer.WriteString("createdAtUtc", DateTime.UtcNow);
+                writer.WriteStartArray("files");
+                foreach (var file in files)
+                    writer.WriteStringValue(file);
+                writer.WriteEndArray();
+                writer.WriteString("state", "pending");
+                writer.WriteNumber("attempts", 0);
+                writer.WriteEndObject();
+                // Flush to disk before the atomic rename: the manifest is what makes a
+                // freshly captured crash case visible to the outbox sweep, and it is written
+                // precisely when the machine is least stable (post-crash). A torn manifest
+                // would orphan the case's dumps until GC deletes them. Mirrors Bowl.Host's
+                // Disk.Write durability.
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
 
-        if (File.Exists(manifestPath)) File.Delete(manifestPath);
-        File.Move(tempPath, manifestPath);
+            File.Move(tempPath, manifestPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
         GeneralTracer.Info($"OutboxManager: manifest written ({files.Count} file(s)) -> {manifestPath}.");
     }
 
@@ -169,27 +180,35 @@ internal sealed class OutboxManager
     }
 
     /// <summary>Graceful-stop signal polled by the supervisor loop (written by <c>bowl stop</c>).</summary>
-    public bool IsStopRequested() => File.Exists(_options.StopSignalPath);
+    public bool IsStopRequested(string? generation) => ReadStopGeneration() != generation;
 
-    /// <summary>Clears the stop signal so the next watch run starts fresh.</summary>
-    public void ClearStopSignal()
+    public string? ReadStopGeneration()
     {
         try
         {
-            if (File.Exists(_options.StopSignalPath))
-                File.Delete(_options.StopSignalPath);
+            using var stream = new FileStream(_options.StopSignalPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
         }
-        catch (Exception ex)
-        {
-            GeneralTracer.Warn($"OutboxManager: could not clear stop signal: {ex.Message}");
-        }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
     }
 
     /// <summary>Requests a graceful stop of the watchdog watching this bowl-home.</summary>
     public static void RequestStop(string bowlHome)
     {
         var path = Path.Combine(bowlHome, "stop.signal");
-        File.WriteAllText(path, DateTime.UtcNow.ToString("O"));
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, Guid.NewGuid().ToString("N"));
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
     }
 
     /// <summary>Case age anchor: the manifest timestamp when readable, the directory timestamp otherwise.</summary>

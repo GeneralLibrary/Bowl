@@ -9,6 +9,7 @@ public static class GeneralTracer
 {
     private static readonly object _lockObj = new();
     private static bool _isTracingEnabled;
+    private static bool _fileLoggingUnavailable;
     private static string _currentLogDate;
     private static TextTraceListener _fileListener;
   
@@ -34,6 +35,7 @@ public static class GeneralTracer
         }
         catch (Exception ex)
         {
+            _fileLoggingUnavailable = true;
             Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
         }
 
@@ -117,7 +119,26 @@ public static class GeneralTracer
         if(!IsTracingEnabled())
             return;
         
-        InitializeFileListener();
+        lock (_lockObj)
+        {
+            if (!_fileLoggingUnavailable)
+            {
+                try
+                {
+                    InitializeFileListener();
+                }
+                catch (Exception ex)
+                {
+                    _fileLoggingUnavailable = true;
+                    if (_fileListener != null)
+                    {
+                        Trace.Listeners.Remove(_fileListener);
+                        _fileListener = null;
+                    }
+                    Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
+                }
+            }
+        }
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
         var levelName = GetLevelName(level);
         var fullMessage = string.Empty;

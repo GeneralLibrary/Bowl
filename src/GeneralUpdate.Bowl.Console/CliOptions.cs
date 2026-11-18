@@ -52,9 +52,8 @@ internal sealed class WatchOptions
     public TimeSpan IdleExit { get; private set; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    ///     Advanced hook: external command executed after crash evidence is written (replaces the
-    ///     removed AutoRestore semantics — users who want crash-triggered rollback wire their own
-    ///     restore script and own the risk). The evidence directory is appended as an argument.
+    ///     Advanced hook: enables the fixed-name script after crash evidence is written.
+    ///     The evidence directory is passed in the BOWL_EVIDENCE_DIRECTORY environment variable.
     /// </summary>
     public string? OnCrash { get; private set; }
 
@@ -248,9 +247,12 @@ internal sealed class WatchOptions
         Usage:
           bowl watch --target-name <name> --install-path <dir> --version <ver> [--schema 2]
                      [--bowl-home <dir>] [--dump-type Mini|Heap|Full] [--idle-exit hh:mm:ss]
-                     [--config <file>] [--on-crash <command>] [--log-level <level>]
+                     [--config <file>] [--on-crash <enable>] [--log-level <level>]
           bowl watch                          (no arguments: read the default bowl.json)
           bowl stop  [--bowl-home <dir>]      (ask a running watchdog to exit gracefully)
+
+        --on-crash enables on-crash.cmd (Windows) or on-crash.sh next to bowl.
+        The hook receives the evidence directory in BOWL_EVIDENCE_DIRECTORY.
 
         Exit codes:
           0  normal exit          2  already running (single-instance lock held)

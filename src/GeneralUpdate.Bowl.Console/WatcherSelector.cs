@@ -6,15 +6,16 @@ using GeneralUpdate.Bowl.Strategies;
 namespace GeneralUpdate.Bowl.ConsoleApp;
 
 /// <summary>Result of one watch session: the target has exited when the outcome is returned.</summary>
-/// <param name="TargetExitCode">Exit code of the watched process; <c>-1</c> when the session failed before the exit.</param>
+/// <param name="TargetExitCode">Exit code of the watched process, or <c>null</c> when unavailable.</param>
 /// <param name="DumpPath">Dump captured for this session, or <c>null</c>.</param>
 /// <param name="OutputLines">Tool output lines (procdump stdout/stderr), for the crash report.</param>
 internal sealed record WatchOutcome(
-    int TargetExitCode = -1,
+    int? TargetExitCode = null,
     string? DumpPath = null,
-    IReadOnlyList<string> OutputLines = null!)
+    IReadOnlyList<string>? ToolOutput = null)
 {
     public static readonly WatchOutcome Empty = new();
+    public IReadOnlyList<string> OutputLines => ToolOutput ?? Array.Empty<string>();
 }
 
 /// <summary>
@@ -81,9 +82,9 @@ internal sealed class ProcdumpWatcher : IProcessWatcher
         var dumpPath = Path.Combine(context.FailDirectory, context.DumpFileName);
         return new WatchOutcome
         {
-            TargetExitCode = target.ExitCode,
+            TargetExitCode = ExitCodeWatcher.TryGetExitCode(target),
             DumpPath = File.Exists(dumpPath) ? dumpPath : null,
-            OutputLines = outputLines,
+            ToolOutput = outputLines,
         };
     }
 
@@ -144,11 +145,13 @@ internal sealed class CreatedumpWatcher : IProcessWatcher
 
     public async Task<WatchOutcome> WaitAsync(Process target, BowlContext context, CancellationToken ct)
     {
+        var started = DateTime.UtcNow;
         var exitCode = await ExitCodeWatcher.WaitTargetAsync(target, ct);
-        if (ExitCodeWatcherStrategy.IsCrashExitCode(exitCode.TargetExitCode))
+        if (exitCode.TargetExitCode is null || ExitCodeWatcherStrategy.IsCrashExitCode(exitCode.TargetExitCode.Value))
         {
             var dump = _strategy.CollectRuntimeDump(
-                target.Id, context.FailDirectory, context.DumpFileName);
+                target.Id, context.FailDirectory, context.DumpFileName,
+                exitCode.TargetExitCode is null ? started : null, requirePid: exitCode.TargetExitCode is null);
             return exitCode with { DumpPath = dump };
         }
 
@@ -168,7 +171,14 @@ internal sealed class ExitCodeWatcher : IProcessWatcher
     internal static async Task<WatchOutcome> WaitTargetAsync(Process target, CancellationToken ct)
     {
         await target.WaitForExitAsync(ct);
-        GeneralTracer.Info($"ExitCodeWatcher: target exited with code {target.ExitCode}.");
-        return new WatchOutcome { TargetExitCode = target.ExitCode };
+        var code = TryGetExitCode(target);
+        GeneralTracer.Info($"ExitCodeWatcher: target exited with code {(code?.ToString() ?? "unavailable")}.");
+        return new WatchOutcome { TargetExitCode = code };
+    }
+
+    internal static int? TryGetExitCode(Process target)
+    {
+        try { return target.ExitCode; }
+        catch (InvalidOperationException) { return null; }
     }
 }

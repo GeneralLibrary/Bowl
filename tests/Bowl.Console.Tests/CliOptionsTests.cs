@@ -89,6 +89,7 @@ public class CliOptionsTests : IDisposable
         Assert.Empty(errors);
         Assert.NotNull(options);
         Assert.Equal("MyApp", options!.TargetName);
+        Assert.Equal(AppContext.BaseDirectory, options.BowlHome);
     }
 
     [Fact]

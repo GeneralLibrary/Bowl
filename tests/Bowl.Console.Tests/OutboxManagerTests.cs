@@ -82,6 +82,40 @@ public class OutboxManagerTests : IDisposable
     }
 
     [Fact]
+    public void WriteManifest_UnknownExitStatusIsNull()
+    {
+        var manager = CreateManager();
+        var session = manager.CreateSessionDirectory();
+        manager.WriteManifest(session, new WatchOutcome());
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(session, "manifest.json")));
+        Assert.Equal(JsonValueKind.Null, manifest.RootElement.GetProperty("exitCode").ValueKind);
+        Assert.Empty(new WatchOutcome().OutputLines);
+    }
+
+    [Fact]
+    public void StopGeneration_IsObservedByAllExistingWatchersButNotNewOnes()
+    {
+        var home = Path.Combine(_installPath, "home");
+        Directory.CreateDirectory(home);
+        var options = WatchOptions.Parse(new[] {
+            "--target-name", "TestApp", "--install-path", _installPath,
+            "--version", "1.0", "--bowl-home", home
+        }, out var errors);
+        Assert.Empty(errors);
+        var first = new OutboxManager(options!);
+        var second = new OutboxManager(options!);
+        var firstGeneration = first.ReadStopGeneration();
+        var secondGeneration = second.ReadStopGeneration();
+        OutboxManager.RequestStop(home);
+        Assert.True(first.IsStopRequested(firstGeneration));
+        Assert.True(second.IsStopRequested(secondGeneration));
+        var newGeneration = first.ReadStopGeneration();
+        Assert.False(first.IsStopRequested(newGeneration));
+        OutboxManager.RequestStop(home);
+        Assert.True(first.IsStopRequested(newGeneration));
+    }
+
+    [Fact]
     public void RemoveSessionIfEmpty_DeletesEmptyDirectoryOnly()
     {
         var manager = CreateManager();

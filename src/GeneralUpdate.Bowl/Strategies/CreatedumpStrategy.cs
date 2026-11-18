@@ -83,13 +83,15 @@ internal sealed class CreatedumpStrategy : IBowlStrategy
     /// <param name="targetPid">PID of the crashed process (resolves the %d placeholder).</param>
     /// <param name="failDirectory">Evidence directory the dump is moved into.</param>
     /// <param name="dumpFileName">Canonical dump file name inside the evidence directory.</param>
-    public string? CollectRuntimeDump(int targetPid, string failDirectory, string dumpFileName)
+    public string? CollectRuntimeDump(int targetPid, string failDirectory, string dumpFileName,
+        DateTime? notBeforeUtc = null, bool requirePid = false)
     {
-        foreach (var candidate in EnumerateDumpCandidates(targetPid))
+        foreach (var candidate in EnumerateDumpCandidates(targetPid, requirePid))
         {
             try
             {
                 if (!File.Exists(candidate)) continue;
+                if (notBeforeUtc.HasValue && File.GetLastWriteTimeUtc(candidate) < notBeforeUtc.Value) continue;
 
                 Directory.CreateDirectory(failDirectory);
                 var destination = Path.Combine(failDirectory, dumpFileName);
@@ -115,10 +117,10 @@ internal sealed class CreatedumpStrategy : IBowlStrategy
     ///     placeholder), the self-contained layout (next to the watchdog executable), then the
     ///     well-known shared-runtime directories.
     /// </summary>
-    private static System.Collections.Generic.IEnumerable<string> EnumerateDumpCandidates(int targetPid)
+    private static System.Collections.Generic.IEnumerable<string> EnumerateDumpCandidates(int targetPid, bool requirePid)
     {
         var configured = Environment.GetEnvironmentVariable("DOTNET_DbgMiniDumpName");
-        if (!string.IsNullOrWhiteSpace(configured))
+        if (!string.IsNullOrWhiteSpace(configured) && (!requirePid || configured.Contains("%d")))
         {
             yield return configured.Replace("%d", targetPid.ToString());
         }
@@ -133,7 +135,8 @@ internal sealed class CreatedumpStrategy : IBowlStrategy
                 "coredump.dmp"
             };
             foreach (var pattern in patterns)
-                yield return Path.Combine(root, pattern);
+                if (!requirePid || pattern.EndsWith("." + targetPid))
+                    yield return Path.Combine(root, pattern);
         }
     }
 

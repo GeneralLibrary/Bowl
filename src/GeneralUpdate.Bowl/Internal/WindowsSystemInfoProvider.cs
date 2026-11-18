@@ -11,7 +11,7 @@ namespace GeneralUpdate.Bowl.Internal;
 /// Windows system info provider — runs <c>export.bat</c> to collect driver, system,
 /// and event log data. The executed command line is fully literal
 /// (<c>cmd /c export.bat</c>, resolved from the script's own directory); the output
-/// directory travels via the <c>export.pointer</c> file next to the script, never
+/// directory travels via a child-only environment variable, never
 /// as a command-line argument, so no runtime data enters the process command line.
 /// </summary>
 internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
@@ -29,19 +29,16 @@ internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
             throw new FileNotFoundException("export.bat not found!", batPath);
         }
 
-        // The bat reads its output directory from export.pointer (next to the
-        // script), so the spawned command line is fully literal and nothing derived
-        // from runtime state is ever concatenated into it.
-        File.WriteAllText(Path.Combine(appDir, "export.pointer"), outputDirectory);
-
-        // export.bat is resolved from the script's own directory: the working
-        // directory is set for the spawn and restored afterwards (process-global,
-        // so saved/restored around the call).
-        var previousDirectory = Environment.CurrentDirectory;
-        try
+        var startInfo = new ProcessStartInfo
         {
-            Environment.CurrentDirectory = appDir;
-            using var process = Process.Start("cmd.exe", "/c export.bat");
+            FileName = "cmd.exe",
+            Arguments = "/c export.bat",
+            WorkingDirectory = appDir,
+            UseShellExecute = false,
+        };
+        startInfo.EnvironmentVariables["BOWL_EVIDENCE_DIRECTORY"] = outputDirectory;
+        using (var process = Process.Start(startInfo))
+        {
             if (process == null)
             {
                 GeneralTracer.Warn("WindowsSystemInfoProvider: export.bat could not be started.");
@@ -58,11 +55,6 @@ internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
                 GeneralTracer.Info($"WindowsSystemInfoProvider: export.bat finished (code {process.ExitCode}).");
             }
         }
-        finally
-        {
-            Environment.CurrentDirectory = previousDirectory;
-        }
-
         return Task.CompletedTask;
     }
 }
