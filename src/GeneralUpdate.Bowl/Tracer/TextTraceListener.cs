@@ -42,12 +42,22 @@ internal class TextTraceListener : TraceListener, IDisposable
 
     private void ProcessQueue()
     {
+        var unavailable = false;
         foreach (var message in _messageQueue.GetConsumingEnumerable())
         {
-            using (var fileStream = new FileStream(_filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
-            using (var writer = new StreamWriter(fileStream))
+            if (unavailable) continue;
+            try
             {
-                writer.Write(message);
+                using (var fileStream = new FileStream(_filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                using (var writer = new StreamWriter(fileStream))
+                {
+                    writer.Write(message);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                unavailable = true;
+                Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
             }
         }
     }

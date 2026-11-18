@@ -109,15 +109,7 @@ public class BowlTests
     [Fact]
     public async Task LaunchAsync_CancellationTokenCancelled_ThrowsOperationCanceledException()
     {
-        _strategy.PrepareResult = new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = "/c timeout 10",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        _strategy.PrepareResult = SleepTenProcess();
         var bowl = CreateBowl();
         var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -131,15 +123,7 @@ public class BowlTests
     [Fact]
     public async Task LaunchAsync_ProcessTimeout_ReturnsFailedResult()
     {
-        _strategy.PrepareResult = new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = "/c timeout 5",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        _strategy.PrepareResult = SleepFiveProcess();
         var bowl = CreateBowl();
         var ctx = CreateValidContext();
         ctx = ctx.Normalize();
@@ -170,15 +154,7 @@ public class BowlTests
     [Fact]
     public async Task LaunchAsync_NormalExit_NoDump_SuccessIsExitCodeZero()
     {
-        _strategy.PrepareResult = new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = "/c exit 0",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        _strategy.PrepareResult = ExitZeroProcess();
         var bowl = CreateBowl();
         var failDir = Path.Combine(Path.GetTempPath(), $"BowlTest_NoDump_{Guid.NewGuid():N}");
         Directory.CreateDirectory(failDir);
@@ -208,15 +184,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
             _reporter.ReportPath = Path.Combine(failDir, "v1_fail.json");
 
             var bowl = CreateBowl();
@@ -262,15 +230,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
             _reporter.ReportPath = Path.Combine(failDir, "v1_fail.json");
 
             var bowl = CreateBowl();
@@ -317,15 +277,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
 
             var bowl = CreateBowl();
             var ctx = new BowlContext
@@ -373,15 +325,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
 
             var bowl = CreateBowl();
             var ctx = new BowlContext
@@ -428,15 +372,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
 
             var bowl = CreateBowl();
             var ctx = new BowlContext
@@ -486,15 +422,7 @@ public class BowlTests
 
         try
         {
-            _strategy.PrepareResult = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c exit 0",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            _strategy.PrepareResult = ExitZeroProcess();
 
             var bowl = CreateBowl();
             var ctx = new BowlContext
@@ -522,5 +450,36 @@ public class BowlTests
         {
             try { Directory.Delete(tempRoot, recursive: true); } catch { }
         }
+    }
+
+    // ---- OS-portable trivial target processes ----
+
+    // Lifecycle tests only need processes that exit immediately or sleep briefly.
+    // Both platform command lines are compile-time literals — nothing dynamic is
+    // ever interpolated — and POSIX sh takes the whole script as one quoted
+    // argument, so the same suite runs on Windows and Linux CI alike.
+    private static ProcessStartInfo ExitZeroProcess() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd.exe", "/c exit 0")
+        : LiteralProcess("/bin/sh", "-c \"exit 0\"");
+
+    private static ProcessStartInfo SleepTenProcess() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd.exe", "/c timeout 10")
+        : LiteralProcess("/bin/sh", "-c \"sleep 10\"");
+
+    private static ProcessStartInfo SleepFiveProcess() => OperatingSystem.IsWindows()
+        ? LiteralProcess("cmd.exe", "/c timeout 5")
+        : LiteralProcess("/bin/sh", "-c \"sleep 5\"");
+
+    private static ProcessStartInfo LiteralProcess(string fileName, string arguments)
+    {
+        return new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
     }
 }

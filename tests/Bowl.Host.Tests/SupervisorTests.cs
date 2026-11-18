@@ -133,6 +133,44 @@ public sealed class SupervisorTests
     }
 
     [Fact]
+    public async Task CompletedHandoffWithoutObservedAwaitingHealth_IsSupervised()
+    {
+        // The protocol allows the updater to write 'completed' and exit; two writes can
+        // land inside one poll so the host may never see awaitingHealth. The exited
+        // updater must not be mislabeled updaterTerminated (which with AutoRollback
+        // would stop the healthy application and restore the old files).
+        using var f = new Fixture();
+        f.Request = f.Request with { LaunchMode = "processAlive" };
+        var app = new ProcessIdentity(54321, DateTimeOffset.UtcNow);
+        f.Processes.Alive = false;                       // updater already exited
+        f.Processes.Probe = identity => identity == app; // only the application is alive
+        f.Producer("completed", app);
+        var result = await f.Run();
+        Assert.Equal("success", result.Outcome);
+        Assert.Equal("processAlive", result.Verification);
+    }
+
+    [Fact]
+    public async Task CompletedDuringHealthObservation_IsNotRegression()
+    {
+        // A producer finalizing with 'completed' while the host is already inside the
+        // health window is a legal final confirmation, not a regression; discarding the
+        // observation used to report monitorUnavailable for a healthy update.
+        using var f = new Fixture();
+        f.Request = f.Request with { LaunchMode = "processAlive" };
+        var app = new ProcessIdentity(54321, DateTimeOffset.UtcNow);
+        f.Processes.Probe = identity =>
+        {
+            if (identity != app) f.Producer("completed", app); // finalize after handoff
+            return identity == app;
+        };
+        f.Producer("awaitingHealth", app);
+        var result = await f.Run();
+        Assert.Equal("success", result.Outcome);
+        Assert.Equal("processAlive", result.Verification);
+    }
+
+    [Fact]
     public async Task EarlyApplicationExit_IsHealthFailureNotLaunchOrUpdateFailure()
     {
         using var f = new Fixture();

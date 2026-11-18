@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,8 +26,19 @@ internal sealed class WindowsBowlStrategy : IBowlStrategy
             _ => "procdump64a.exe",
         };
 
-        var appDir = Path.Combine(context.TargetPath, "Applications", "Windows");
-        var appPath = Path.Combine(appDir, procdumpExe);
+        // Tier selection (StrategyFactory) probes for procdump under the watchdog's own
+        // BaseDirectory, because the console watchdog is deployed independently of the
+        // monitored application. Resolve the binary from the same location first and fall
+        // back to the target install path so in-process (API-embedded) consumers keep
+        // working; resolving only from TargetPath silently broke the standalone
+        // deployment form (procdump launch failed on every session).
+        var procdumpCandidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Applications", "Windows", procdumpExe),
+            Path.Combine(context.TargetPath, "Applications", "Windows", procdumpExe),
+        };
+        var appPath = procdumpCandidates.FirstOrDefault(File.Exists)
+            ?? procdumpCandidates[0];
         var dumpFullPath = Path.Combine(context.FailDirectory, context.DumpFileName);
 
         // Map DumpType to procdump flag

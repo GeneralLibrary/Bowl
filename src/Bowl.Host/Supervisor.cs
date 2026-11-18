@@ -110,8 +110,17 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
                 }
                 if (request.LaunchMode == "filesOnly" && producer?.Stage == "completed")
                     return Finish(request, producer, "success", "filesApplied");
-                if (request.LaunchMode == "processAlive" && producer?.Stage == "awaitingHealth")
+                if (request.LaunchMode == "processAlive" && producer?.Stage is "awaitingHealth" or "completed")
                 {
+                    // 'completed' is a legal handoff in processAlive mode as well: the
+                    // protocol allows exit after completed/awaitingHealth, and two producer
+                    // writes can land inside one 100 ms poll. Observing completed directly
+                    // (before awaitingHealth was ever seen) used to mislabel healthy
+                    // updates as updaterTerminated — and with AutoRollback that rolled back
+                    // successful updates; completed arriving during health observation used
+                    // to throw as "regressed" and discard an already-successful result.
+                    // Treat either stage as the application handoff declaration and keep
+                    // supervising the application through its health window.
                     var application = producer.Application
                         ?? throw new InvalidDataException("Application identity is required.");
                     if (application.Pid == request.Updater.Pid || application.Pid == Environment.ProcessId)
