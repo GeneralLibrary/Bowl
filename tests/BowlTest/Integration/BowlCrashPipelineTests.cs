@@ -276,15 +276,7 @@ namespace BowlTest.Integration
                 // Simulate procdump writing a dump file
                 Directory.CreateDirectory(Path.GetDirectoryName(_dumpPath)!);
                 File.WriteAllText(_dumpPath, "FAKE_DUMP_CONTENT");
-                return new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c exit 0",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
+                return ExitZeroProcess();
             }
 
             public Task PostProcessAsync(in BowlContext context,
@@ -301,15 +293,7 @@ namespace BowlTest.Integration
         {
             public ProcessStartInfo? Prepare(in BowlContext context)
             {
-                return new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c exit 0",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
+                return ExitZeroProcess();
             }
 
             public Task PostProcessAsync(in BowlContext context,
@@ -325,5 +309,27 @@ namespace BowlTest.Integration
                 => Task.CompletedTask;
         }
 
+        // OS-portable trivial target process: exits immediately. Both platform
+        // command lines are compile-time literals — nothing dynamic is ever
+        // interpolated — so the pipeline suite runs on Windows and Linux CI alike.
+        private static ProcessStartInfo ExitZeroProcess() => OperatingSystem.IsWindows()
+            ? new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/c exit 0",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }
+            : new ProcessStartInfo
+            {
+                FileName = "/bin/sh",
+                Arguments = "-c \"exit 0\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
     }
 }

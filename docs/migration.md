@@ -28,10 +28,30 @@ Intentional edits to imported files:
 
 | File | Reason |
 | --- | --- |
-| `src\GeneralUpdate.Bowl\GeneralUpdate.Bowl.csproj` | Standalone repository URLs and explicit C# 12 for existing record syntax |
+| `src\GeneralUpdate.Bowl\GeneralUpdate.Bowl.csproj` | Standalone repository URLs, explicit C# 12 and removal of unused immutable-collections dependency |
 | `src\GeneralUpdate.Bowl\BowlBootstrap.cs` | Correct misleading no-dump health logging/documentation; behavior preserved |
 | `src\GeneralUpdate.Bowl\BowlResult.cs` | Clarify legacy tool result is not application health |
+| `src\GeneralUpdate.Bowl\BowlContext.cs` | `Normalize()` default work model is now `"Normal"` — recovery semantics (`Upgrade` + `AutoRestore`) are an explicit opt-in; the restore decision belongs to the update pipeline (Core RollbackManager) |
+| `src\GeneralUpdate.Bowl\Strategies\StrategyFactory.cs` | Added `CreateWithFallback(out WatcherTier)` three-tier watcher probing (procdump → runtime createdump → exit-code fallback) for the console supervisor; `Create()` and the embedded single-shot API are unchanged |
+| `src\GeneralUpdate.Bowl\Strategies\WindowsBowlStrategy.cs` | Resolve procdump from the watchdog directory before the target installation |
+| `src\GeneralUpdate.Bowl\Applications\Windows\export.bat` | Accept the evidence directory via a per-process environment variable or manual argument |
+| `src\GeneralUpdate.Bowl\Internal\WindowsSystemInfoProvider.cs` | Launch export with a child-specific working directory and environment |
+| `src\GeneralUpdate.Bowl\Tracer\GeneralTracer.cs` | Fall back to console logging when file initialization or rotation fails |
+| `src\GeneralUpdate.Bowl\Tracer\TextTraceListener.cs` | Contain background file-write failures and retain console logging |
 | `tests\BowlTest\README.md` | Correct standalone test entry points and current coverage |
+| `tests\BowlTest\BowlContextTests.cs` | Follow the `Normalize()` default change: empty/null `WorkModel` now normalizes to `"Normal"` |
+| `tests\BowlTest\Strategies\BowlContextTests.cs` | Follow the `Normalize()` default change (default work model assertion) |
+| `tests\BowlTest\Integration\BowlIntegrationTests.cs` | Follow the `Normalize()` default change (default work model assertion) |
+| `tests\BowlTest\BowlTests.cs`, `tests\BowlTest\Integration\BowlCrashPipelineTests.cs`, `tests\BowlTest\Strategies\ProcessRunnerTests.cs` | Use platform-aware process fixtures |
+| `tests\BowlTest\Strategies\WindowsBowlStrategyTests.cs` | Test procdump resolution and preserve any bundled executable fixture |
+
+New files added alongside the import (not part of the 61 migrated entries):
+`src\GeneralUpdate.Bowl\InternalsVisibleTo.cs` (friend assemblies `bowl` and
+`Bowl.Console.Tests`), `src\GeneralUpdate.Bowl\Strategies\WatcherTier.cs`,
+`src\GeneralUpdate.Bowl\Strategies\ExitCodeWatcherStrategy.cs`,
+`src\GeneralUpdate.Bowl\Strategies\CreatedumpStrategy.cs`, and the console
+project `src\GeneralUpdate.Bowl.Console` with its test project
+`tests\Bowl.Console.Tests`.
 
 The manifest's `sha256` is always the original content. `destinationSha256`
 captures the final imported files after those documented changes.

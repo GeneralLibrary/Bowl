@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The distribution binary is `bowl.exe` / `bowl` (docs/bowl-redesign.md §2.2 CLI contract). -->
+    <AssemblyName>bowl</AssemblyName>
+    <RootNamespace>GeneralUpdate.Bowl.ConsoleApp</RootNamespace>
+    <Authors>JusterZhu</Authors>
+    <Description>Independently installed crash-diagnosis watchdog console: supervisor loop, evidence outbox (schema 2) and disk GC. Network-free by design — Core is the only upload egress.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/GeneralLibrary/Bowl</RepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GeneralUpdate.Bowl\GeneralUpdate.Bowl.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bowl.Console.Tests" />
+    <None Include="bowl.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\docs\protocol-v1.md" Link="protocol-v1.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

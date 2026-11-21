@@ -2,10 +2,12 @@
   <Folder Name="/src/">
     <Project Path="src/GeneralUpdate.Bowl/GeneralUpdate.Bowl.csproj" />
     <Project Path="src/Bowl.Host/Bowl.Host.csproj" />
+    <Project Path="src/GeneralUpdate.Bowl.Console/GeneralUpdate.Bowl.Console.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BowlTest/BowlTest.csproj" />
     <Project Path="tests/Bowl.Host.Tests/Bowl.Host.Tests.csproj" />
     <Project Path="tests/Bowl.TestPeer/Bowl.TestPeer.csproj" />
+    <Project Path="tests/Bowl.Console.Tests/Bowl.Console.Tests.csproj" />
   </Folder>
 </Solution>

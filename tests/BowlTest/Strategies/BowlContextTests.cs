@@ -36,7 +36,8 @@ namespace BowlTest.Strategies
             var ctx = new BowlContext { ProcessNameOrId = "test.exe" };
             var normalized = ctx.Normalize();
 
-            Assert.Equal("Upgrade", normalized.WorkModel);
+            // Recovery semantics are opt-in since 10.5: the default work model is "Normal".
+            Assert.Equal("Normal", normalized.WorkModel);
         }
 
         [Fact]

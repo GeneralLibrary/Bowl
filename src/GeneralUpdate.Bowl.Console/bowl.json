@@ -1,0 +1,10 @@
+{
+  "schema": 2,
+  "targetName": "MyApp",
+  "installPath": "D:\\apps\\MyApp",
+  "version": "1.0.2",
+  "dumpType": "Mini",
+  "idleExit": "00:30:00",
+  "onCrash": "",
+  "logLevel": "Information"
+}

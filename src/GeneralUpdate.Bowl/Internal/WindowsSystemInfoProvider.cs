@@ -8,7 +8,11 @@ using GeneralUpdate.Bowl;
 namespace GeneralUpdate.Bowl.Internal;
 
 /// <summary>
-/// Windows system info provider — runs <c>export.bat</c> to collect driver, system, and event log data.
+/// Windows system info provider — runs <c>export.bat</c> to collect driver, system,
+/// and event log data. The executed command line is fully literal
+/// (<c>cmd /c export.bat</c>, resolved from the script's own directory); the output
+/// directory travels via a child-only environment variable, never
+/// as a command-line argument, so no runtime data enters the process command line.
 /// </summary>
 internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
 {
@@ -16,8 +20,7 @@ internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
     {
         GeneralTracer.Info($"WindowsSystemInfoProvider.ExportAsync: exporting to {outputDirectory}.");
 
-        var appDir = Path.Combine(
-            AppDomain.CurrentDomain.BaseDirectory, "Applications", "Windows");
+        var appDir = Path.Combine(AppContext.BaseDirectory, "Applications", "Windows");
         var batPath = Path.Combine(appDir, "export.bat");
 
         if (!File.Exists(batPath))
@@ -26,29 +29,32 @@ internal sealed class WindowsSystemInfoProvider : ISystemInfoProvider
             throw new FileNotFoundException("export.bat not found!", batPath);
         }
 
-        // export.bat takes the output directory as first argument
-        using var process = Process.Start(new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
-            FileName = batPath,
-            Arguments = outputDirectory,
-            UseShellExecute = true,
-            CreateNoWindow = true,
-        });
-
-        if (process != null)
+            FileName = "cmd.exe",
+            Arguments = "/c export.bat",
+            WorkingDirectory = appDir,
+            UseShellExecute = false,
+        };
+        startInfo.EnvironmentVariables["BOWL_EVIDENCE_DIRECTORY"] = outputDirectory;
+        using (var process = Process.Start(startInfo))
         {
-            GeneralTracer.Info("WindowsSystemInfoProvider: export.bat started.");
-            var exited = process.WaitForExit(30_000);
-            if (exited)
+            if (process == null)
             {
-                GeneralTracer.Info($"WindowsSystemInfoProvider: export.bat finished, exit code {process.ExitCode}.");
+                GeneralTracer.Warn("WindowsSystemInfoProvider: export.bat could not be started.");
+                return Task.CompletedTask;
+            }
+
+            if (!process.WaitForExit(30_000))
+            {
+                process.Kill();
+                GeneralTracer.Warn("WindowsSystemInfoProvider: export.bat timed out after 30s and was killed.");
             }
             else
             {
-                GeneralTracer.Warn("WindowsSystemInfoProvider: export.bat timed out after 30s.");
+                GeneralTracer.Info($"WindowsSystemInfoProvider: export.bat finished (code {process.ExitCode}).");
             }
         }
-
         return Task.CompletedTask;
     }
 }

@@ -52,6 +52,14 @@ public readonly record struct BowlContext
     public Func<CrashInfo, CancellationToken, Task>? OnCrash { get; init; }
 
     /// <summary>Returns a context with sensible defaults applied.</summary>
+    /// <remarks>
+    ///     The default work model is <c>"Normal"</c> — standalone monitoring that only collects
+    ///     diagnostics. The former <c>"Upgrade"</c> default (crash → restore backup) is opt-in
+    ///     now: recovery decisions belong to the update pipeline (Core RollbackManager), and an
+    ///     automatic restore triggered from a crash guard must be a deliberate choice. Embedders
+    ///     relying on the old behaviour set <c>WorkModel="Upgrade"</c> + <c>AutoRestore=true</c>
+    ///     explicitly.
+    /// </remarks>
     public BowlContext Normalize()
     {
         return new BowlContext
@@ -62,7 +70,7 @@ public readonly record struct BowlContext
             TargetPath = TargetPath,
             FailDirectory = FailDirectory,
             BackupDirectory = BackupDirectory,
-            WorkModel = string.IsNullOrEmpty(WorkModel) ? "Upgrade" : WorkModel,
+            WorkModel = string.IsNullOrEmpty(WorkModel) ? "Normal" : WorkModel,
             ExtendedField = ExtendedField,
             TimeoutMs = TimeoutMs <= 0 ? 30_000 : TimeoutMs,
             DumpType = DumpType == default ? DumpType.Full : DumpType,

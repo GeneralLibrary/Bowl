@@ -9,6 +9,7 @@ public static class GeneralTracer
 {
     private static readonly object _lockObj = new();
     private static bool _isTracingEnabled;
+    private static bool _fileLoggingUnavailable;
     private static string _currentLogDate;
     private static TextTraceListener _fileListener;
   
@@ -22,8 +23,21 @@ public static class GeneralTracer
         }
 
         Trace.Listeners.Add(new TextWriterTraceListener(Console.Out) { Name = "ConsoleListener" });
-        
-        InitializeFileListener();
+
+        // A read-only install location (e.g. the watchdog deployed under
+        // "C:\Program Files" run by a standard user) cannot create its log directory;
+        // a failing static constructor would be a TypeInitializationException on the
+        // very first trace call and take the whole process down. Degrade to console
+        // logging instead.
+        try
+        {
+            InitializeFileListener();
+        }
+        catch (Exception ex)
+        {
+            _fileLoggingUnavailable = true;
+            Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
+        }
 
         if (Debugger.IsAttached)
             Trace.Listeners.Add(new DefaultTraceListener());
@@ -31,7 +45,7 @@ public static class GeneralTracer
         Trace.AutoFlush = true;
         _isTracingEnabled = true;
     }
-    
+
     private static void InitializeFileListener()
     {
         //Ensure that log files are rotated on a daily basis
@@ -105,7 +119,26 @@ public static class GeneralTracer
         if(!IsTracingEnabled())
             return;
         
-        InitializeFileListener();
+        lock (_lockObj)
+        {
+            if (!_fileLoggingUnavailable)
+            {
+                try
+                {
+                    InitializeFileListener();
+                }
+                catch (Exception ex)
+                {
+                    _fileLoggingUnavailable = true;
+                    if (_fileListener != null)
+                    {
+                        Trace.Listeners.Remove(_fileListener);
+                        _fileListener = null;
+                    }
+                    Console.Error.WriteLine($"GeneralTracer: file logging unavailable ({ex.Message}); continuing with console logging only.");
+                }
+            }
+        }
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
         var levelName = GetLevelName(level);
         var fullMessage = string.Empty;
