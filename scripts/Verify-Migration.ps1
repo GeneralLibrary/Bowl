@@ -10,6 +10,7 @@ try {
         'src/GeneralUpdate.Bowl/Internal/WindowsSystemInfoProvider.cs',
         'src/GeneralUpdate.Bowl/Strategies/WindowsBowlStrategy.cs',
         'src/GeneralUpdate.Bowl/Strategies/StrategyFactory.cs',
+        'src/GeneralUpdate.Bowl/Strategies/ProcessRunner.cs',
         'src/GeneralUpdate.Bowl/Tracer/GeneralTracer.cs',
         'src/GeneralUpdate.Bowl/Tracer/TextTraceListener.cs',
         'tests/BowlTest/README.md',

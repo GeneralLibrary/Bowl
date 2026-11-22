@@ -30,10 +30,14 @@ internal static class ProcessRunner
         using var process = new Process { StartInfo = startInfo };
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdoutClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderrClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         process.OutputDataReceived += (_, e) =>
         {
-            if (!string.IsNullOrEmpty(e.Data))
+            if (e.Data == null)
+                stdoutClosed.TrySetResult(true);
+            else if (e.Data.Length > 0)
             {
                 GeneralTracer.Debug($"ProcessRunner: {e.Data}");
                 lock (outputLines) outputLines.Add(e.Data);
@@ -42,7 +46,9 @@ internal static class ProcessRunner
 
         process.ErrorDataReceived += (_, e) =>
         {
-            if (!string.IsNullOrEmpty(e.Data))
+            if (e.Data == null)
+                stderrClosed.TrySetResult(true);
+            else if (e.Data.Length > 0)
             {
                 GeneralTracer.Debug($"ProcessRunner(stderr): {e.Data}");
                 lock (outputLines) outputLines.Add(e.Data);
@@ -62,30 +68,34 @@ internal static class ProcessRunner
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        // Wait for exit or timeout/cancellation.
+        // Exited can fire before the redirected streams have been drained.
+        var completionTask = Task.WhenAll((Task)tcs.Task, stdoutClosed.Task, stderrClosed.Task);
+        // Wait for exit and stream completion or timeout/cancellation.
         // Cancel the delay when the process exits first to avoid a timer leak.
         var delayTask = Task.Delay(timeoutMs, timeoutCts.Token);
-        var completedTask = await Task.WhenAny(tcs.Task, delayTask);
+        var completedTask = await Task.WhenAny(completionTask, delayTask);
 
         // Cancel the opposing task so timers/resources are reclaimed promptly.
         timeoutCts.Cancel();
 
-        if (completedTask == tcs.Task)
+        if (completedTask == completionTask)
         {
             try { await delayTask; } catch (OperationCanceledException) { /* cancelled — expected */ }
+            await completionTask;
             var exitCode = await tcs.Task;
             GeneralTracer.Info($"ProcessRunner.RunAsync: process exited, ExitCode={exitCode}");
-            // Snapshot output under lock to avoid race with in-flight handlers
             IReadOnlyList<string> snapshot;
             lock (outputLines) { snapshot = outputLines.ToArray(); }
             return new ProcessExitResult { ExitCode = exitCode, OutputLines = snapshot };
         }
 
-        // Timeout or cancellation — kill the process
-        GeneralTracer.Warn($"ProcessRunner.RunAsync: process timed out after {timeoutMs}ms, killing.");
+        // Timeout or cancellation — stop the process if it is still running.
+        GeneralTracer.Warn(ct.IsCancellationRequested
+            ? "ProcessRunner.RunAsync: cancellation requested."
+            : $"ProcessRunner.RunAsync: process or output capture timed out after {timeoutMs}ms.");
         try
         {
-            process.Kill();
+            if (!process.HasExited) process.Kill();
         }
         catch (Exception ex)
         {
@@ -94,6 +104,6 @@ internal static class ProcessRunner
 
         ct.ThrowIfCancellationRequested();
         throw new TimeoutException(
-            $"Process '{startInfo.FileName}' did not exit within {timeoutMs}ms.");
+            $"Process '{startInfo.FileName}' or its output capture did not complete within {timeoutMs}ms.");
     }
 }
