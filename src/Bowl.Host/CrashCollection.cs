@@ -123,15 +123,13 @@ internal sealed class CrashCollection(string root, Request request)
                     tool.Kill();
                 throw;
             }
-            using var registration = token.Register(() =>
-            {
-                try { if (!tool.HasExited) tool.Kill(); }
-                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
-                { Console.Error.WriteLine($"Crash capture tool stop failed: {ex.GetType().Name}."); }
-            });
             var stdout = tool.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
             var stderr = tool.StandardError.BaseStream.CopyToAsync(Stream.Null);
-            await tool.WaitForExitAsync();
+            var exit = tool.WaitForExitAsync();
+            var canceled = Task.Delay(Timeout.InfiniteTimeSpan, token);
+            if (await Task.WhenAny(exit, canceled) == canceled && !tool.HasExited)
+                await StopToolAsync(tool);
+            await exit;
             await Task.WhenAll(stdout, stderr);
             token.ThrowIfCancellationRequested();
             var dump = Path.Combine(staging, context.DumpFileName);
@@ -179,6 +177,26 @@ internal sealed class CrashCollection(string root, Request request)
                 { Console.Error.WriteLine($"Crash evidence cleanup unavailable: {ex.GetType().Name}."); }
             }
         }
+    }
+
+    private static async Task StopToolAsync(Process tool)
+    {
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Host executable is unavailable.");
+        var info = new ProcessStartInfo
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            info.ArgumentList.Add(typeof(Program).Assembly.Location);
+        info.ArgumentList.Add("--stop-capture");
+        info.ArgumentList.Add(tool.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        using var helper = Process.Start(info) ?? throw new InvalidOperationException("Capture stop helper failed to start.");
+        await helper.WaitForExitAsync();
+        if (helper.ExitCode != 0 && !tool.HasExited)
+            throw new InvalidOperationException("Capture stop helper failed.");
     }
 
     // ProcDump returns the number of captured dumps, not zero on success.

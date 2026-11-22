@@ -252,8 +252,10 @@ The attempt's `capture-status.json` records per-target `capturing`, `published`,
 `noDump`, `unavailable` or `interrupted`. `noDump` does not distinguish a normal
 exit from tool failure. Capture errors are also logged to stderr and
 never change the v1 outcome or rollback. The host waits at most three seconds
-for evidence after a failed observation, then cancels its own tools; an owned
-Windows job closes them if the host exits. A crash or failure before publication
+for evidence after a failed observation, then sends a console interrupt to each
+owned ProcDump so it can detach without terminating the monitored process; an owned
+Windows job closes them if the host exits. An abrupt host exit or failed graceful
+detach can therefore terminate a process that ProcDump is debugging. A crash or failure before publication
 can leave a non-GUID `.partial` directory: it is not scanned or automatically
 retried or deleted. Operators must inspect it and securely remove or archive it;
 restarting an already completed attempt cannot recreate an unattached dump.

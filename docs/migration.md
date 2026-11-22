@@ -34,6 +34,7 @@ Intentional edits to imported files:
 | `src\GeneralUpdate.Bowl\BowlContext.cs` | `Normalize()` default work model is now `"Normal"` — recovery semantics (`Upgrade` + `AutoRestore`) are an explicit opt-in; the restore decision belongs to the update pipeline (Core RollbackManager) |
 | `src\GeneralUpdate.Bowl\Strategies\StrategyFactory.cs` | Added `CreateWithFallback(out WatcherTier)` three-tier watcher probing (procdump → runtime createdump → exit-code fallback) for the console supervisor; `Create()` and the embedded single-shot API are unchanged |
 | `src\GeneralUpdate.Bowl\Strategies\WindowsBowlStrategy.cs` | Resolve procdump from the watchdog directory before the target installation |
+| `src\GeneralUpdate.Bowl\Strategies\ProcessRunner.cs` | Drain asynchronous output handlers before returning the process output |
 | `src\GeneralUpdate.Bowl\Applications\Windows\export.bat` | Accept the evidence directory via a per-process environment variable or manual argument |
 | `src\GeneralUpdate.Bowl\Internal\WindowsSystemInfoProvider.cs` | Launch export with a child-specific working directory and environment |
 | `src\GeneralUpdate.Bowl\Tracer\GeneralTracer.cs` | Fall back to console logging when file initialization or rotation fails |
@@ -47,7 +48,7 @@ Intentional edits to imported files:
 
 New files added alongside the import (not part of the 61 migrated entries):
 `src\GeneralUpdate.Bowl\InternalsVisibleTo.cs` (friend assemblies `bowl` and
-`Bowl.Console.Tests`), `src\GeneralUpdate.Bowl\Strategies\WatcherTier.cs`,
+`Bowl.Console.Tests` and `Bowl.Host`), `src\GeneralUpdate.Bowl\Strategies\WatcherTier.cs`,
 `src\GeneralUpdate.Bowl\Strategies\ExitCodeWatcherStrategy.cs`,
 `src\GeneralUpdate.Bowl\Strategies\CreatedumpStrategy.cs`, and the console
 project `src\GeneralUpdate.Bowl.Console` with its test project

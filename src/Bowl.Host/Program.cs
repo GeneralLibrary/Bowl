@@ -9,6 +9,13 @@ internal static class Program
     {
         try
         {
+            if (args.Length == 2 && args[0] == "--stop-capture" && OperatingSystem.IsWindows())
+            {
+                if (!int.TryParse(args[1], out var capturePid) || capturePid <= 0)
+                    throw new ArgumentException("Invalid capture process ID.");
+                CaptureConsole.Stop(capturePid);
+                return 0;
+            }
             if (args.Length != 4 || args[2] != "--state-root" ||
                 args[0] is not ("--attempt" or "--retry"))
                 throw new ArgumentException("Use --attempt <GUID> --state-root <absolute-path> or --retry <limit:1-100> --state-root <absolute-path>.");
