@@ -75,6 +75,7 @@ internal static class ProcessRunner
             try { await delayTask; } catch (OperationCanceledException) { /* cancelled — expected */ }
             var exitCode = await tcs.Task;
             GeneralTracer.Info($"ProcessRunner.RunAsync: process exited, ExitCode={exitCode}");
+            process.WaitForExit();
             // Snapshot output under lock to avoid race with in-flight handlers
             IReadOnlyList<string> snapshot;
             lock (outputLines) { snapshot = outputLines.ToArray(); }

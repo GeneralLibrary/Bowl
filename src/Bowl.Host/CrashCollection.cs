@@ -220,7 +220,6 @@ internal sealed class CrashCollection(string root, Request request)
         writer.WriteNull("exitCode");
         writer.WriteString("createdAtUtc", DateTimeOffset.UtcNow);
         writer.WriteStartArray("files");
-        writer.WriteStringValue("manifest.json");
         writer.WriteStringValue("crash.json");
         writer.WriteStringValue("crash.dmp");
         writer.WriteEndArray();

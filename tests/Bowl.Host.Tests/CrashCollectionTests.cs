@@ -120,7 +120,7 @@ public sealed class CrashCollectionTests
         Assert.Equal("1.2.3", root.GetProperty("version").GetString());
         Assert.Equal("pending", root.GetProperty("state").GetString());
         Assert.Equal(0, root.GetProperty("attempts").GetInt32());
-        Assert.Equal(new[] { "manifest.json", "crash.json", "crash.dmp" },
+        Assert.Equal(new[] { "crash.json", "crash.dmp" },
             root.GetProperty("files").EnumerateArray().Select(x => x.GetString()).ToArray());
     }
 

@@ -242,7 +242,7 @@ flushed into a staging directory beneath
 `<state-root>\crash-outbox\<targetVersion>`; a schema 2 manifest is written
 last, then the whole directory is atomically renamed to a new canonical GUID.
 The manifest has `schema`, `guid`, `kind:"crash"`, `targetName`, `version`,
-`exitCode:null`, `createdAtUtc`, `files:["manifest.json","crash.json","crash.dmp"]`,
+`exitCode:null`, `createdAtUtc`, `files:["crash.json","crash.dmp"]`,
 `state:"pending"` and `attempts:0`. No case is published without both complete
 files. Core Client owns uploading, retries and acknowledged-case deletion;
 the host neither uploads nor mutates a published case. The state root is outside
