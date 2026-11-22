@@ -81,27 +81,6 @@ public sealed class ProcessTests
         await process.WaitForExitAsync(timeout.Token);
     }
 
-    private static async Task WaitForCaptureTools(int count)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (!timeout.IsCancellationRequested)
-        {
-            var tools = new[] { "procdump", "procdump64", "procdump64a" }
-                .SelectMany(Process.GetProcessesByName).ToArray();
-            try
-            {
-                if (tools.Length >= count)
-                    return;
-            }
-            finally
-            {
-                foreach (var tool in tools)
-                    tool.Dispose();
-            }
-            await Task.Delay(50, timeout.Token);
-        }
-    }
-
     private static void Cleanup(Process process)
     {
         if (!process.HasExited)
@@ -186,7 +165,8 @@ public sealed class ProcessTests
         var updaterIdentity = Identity(updater);
         f.Request = f.Request with
         {
-            Updater = updaterIdentity, CrashCollectionEnabled = true, TargetVersion = "1.2.3", Report = new()
+            Updater = updaterIdentity, CrashCollectionEnabled = true, TargetVersion = "1.2.3",
+            UpdateTimeoutSeconds = 30, Report = new()
         };
         f.Save();
         f.Producer("filesApplying");
@@ -233,7 +213,6 @@ public sealed class ProcessTests
         try
         {
             await Ready(f, host);
-            await WaitForCaptureTools(2);
             await Wait(host);
 
             var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
