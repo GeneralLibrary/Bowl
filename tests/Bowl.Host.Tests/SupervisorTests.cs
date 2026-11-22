@@ -23,6 +23,22 @@ public sealed class SupervisorTests
     }
 
     [Fact]
+    public async Task FailedRecoveryBlocksNextAttemptUntilExplicitRepair()
+    {
+        using var f = new Fixture();
+        f.Request = f.Request with { AutoRollback = true };
+        f.Processes.Alive = false;
+        f.Snapshot();
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        Assert.Equal("failed", (await f.Run()).Rollback);
+        f.Request = f.Request with { AttemptId = Guid.NewGuid().ToString("D") };
+        Directory.CreateDirectory(f.DirectoryPath);
+        f.Producer("completed");
+        await Assert.ThrowsAsync<InvalidDataException>(f.Run);
+        Assert.False(File.Exists(Path.Combine(f.DirectoryPath, "ready.json")));
+    }
+
+    [Fact]
     public async Task NewAttemptWaitsForPreviousUpdaterEvenAfterFileSuccess()
     {
         using var f = new Fixture();
@@ -62,6 +78,178 @@ public sealed class SupervisorTests
         Assert.Equal("acknowledged", f.Outbox.State);
         await f.Run();
         Assert.Single(f.Handler.Bodies);
+    }
+
+    [Fact]
+    public async Task FailedUpdateReportsFailedRollbackAndRetriesIdenticalSafeDiagnostics()
+    {
+        using var f = new Fixture();
+        var variable = "BOWL_APP_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "example-app-secret");
+        try
+        {
+            f.Request = f.Request with
+            {
+                AutoRollback = true,
+                Report = f.Request.Report with { AppKeyEnvironmentVariable = variable, Url = "https://localhost/report" }
+            };
+            f.Processes.Alive = false;
+            f.Snapshot();
+            f.Producer("failed", error: new Failure
+            {
+                Category = "updateFailure", ExceptionType = "System.IO.IOException",
+                Message = "private message", StackTrace = "private stack", FailedPath = "private path", HResult = -123
+            });
+            f.Handler.Status = HttpStatusCode.ServiceUnavailable;
+            f.Handler.BeforeSend = () => Assert.Equal("new",
+                File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+
+            var result = await f.Run();
+            Assert.Equal("failed", result.Rollback);
+            Assert.Equal("pending", f.Outbox.State);
+            var first = Assert.Single(f.Handler.Bodies);
+            using var body = JsonDocument.Parse(first);
+            Assert.Equal("example-app-secret", body.RootElement.GetProperty("appKey").GetString());
+            Assert.DoesNotContain("example-app-secret", File.ReadAllText(Path.Combine(f.DirectoryPath, "request.json")));
+            Assert.DoesNotContain("example-app-secret", File.ReadAllText(Path.Combine(f.DirectoryPath, "outbox.json")));
+            var diagnostics = body.RootElement.GetProperty("diagnostics");
+            Assert.Equal("updateFailure", diagnostics.GetProperty("outcome").GetString());
+            Assert.Equal("failed", diagnostics.GetProperty("stage").GetString());
+            Assert.False(diagnostics.GetProperty("rollback").GetBoolean());
+            Assert.Equal("System.IO.IOException", diagnostics.GetProperty("exceptionType").GetString());
+            Assert.Equal(-123, diagnostics.GetProperty("hResult").GetInt32());
+            Assert.DoesNotContain("private", first);
+
+            Disk.Write(Path.Combine(f.DirectoryPath, "outbox.json"),
+                f.Outbox with { NextAttemptUtc = DateTimeOffset.UtcNow.AddSeconds(-1) }, ProtocolJson.Default.Outbox);
+            f.Handler.Status = HttpStatusCode.OK;
+            f.Handler.ResponseBody = """{"code":200,"body":true,"isSuccess":true}""";
+            await f.Run();
+            Assert.Equal(2, f.Handler.Bodies.Count);
+            Assert.Equal(first, f.Handler.Bodies[1]);
+            Assert.Equal(f.Handler.Keys[0], f.Handler.Keys[1]);
+            Assert.Equal("acknowledged", f.Outbox.State);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, null); }
+    }
+
+    [Fact]
+    public async Task ExistingLegacyOutboxRetriesWithoutChangingPayload()
+    {
+        using var f = new Fixture();
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        f.Handler.Status = HttpStatusCode.ServiceUnavailable;
+        await f.Run();
+        var legacy = f.Outbox with
+        {
+            Payload = new LegacyPayload(42, 3, 1),
+            NextAttemptUtc = DateTimeOffset.UtcNow.AddSeconds(-1)
+        };
+        Disk.Write(Path.Combine(f.DirectoryPath, "outbox.json"), legacy, ProtocolJson.Default.Outbox);
+        f.Handler.Status = HttpStatusCode.OK;
+        await f.Run();
+        using var body = JsonDocument.Parse(f.Handler.Bodies[1]);
+        Assert.Equal(3, body.RootElement.EnumerateObject().Count());
+        Assert.Equal("acknowledged", f.Outbox.State);
+    }
+
+    [Fact]
+    public async Task UntrustedExceptionTypeIsNotUploaded()
+    {
+        using var f = new Fixture();
+        f.Producer("failed", error: new Failure
+        {
+            Category = "updateFailure", ExceptionType = "Private.Customer.Secret"
+        });
+        await f.Run();
+        Assert.DoesNotContain("Private.Customer.Secret", Assert.Single(f.Handler.Bodies));
+    }
+
+    [Theory]
+    [InlineData("{\"code\":400,\"body\":false,\"isSuccess\":false}", "pending")]
+    [InlineData("{\"code\":200,\"body\":true,\"isSuccess\":false}", "pending")]
+    [InlineData("{\"code\":200,\"body\":false}", "pending")]
+    [InlineData("{\"code\":200,\"body\":true,\"isSuccess\":true,\"errorCode\":0}", "acknowledged")]
+    [InlineData("{\"unexpected\":true}", "pending")]
+    [InlineData("invalid", "pending")]
+    public async Task BusinessAcknowledgementMustIndicateSuccess(string response, string state)
+    {
+        using var f = new Fixture();
+        f.Handler.ResponseBody = response;
+        f.Producer("completed");
+        await f.Run();
+        Assert.Equal(state, f.Outbox.State);
+    }
+
+    [Fact]
+    public async Task RetryWithoutAppKeyKeepsPendingAndRecordsError()
+    {
+        using var f = new Fixture();
+        var variable = "BOWL_MISSING_" + Guid.NewGuid().ToString("N");
+        f.Request = f.Request with
+        {
+            Report = f.Request.Report with { AppKeyEnvironmentVariable = variable }
+        };
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        await f.Run();
+        Assert.Empty(f.Handler.Bodies);
+        Assert.Equal("pending", f.Outbox.State);
+        Assert.Equal("AppKeyUnavailable", f.Outbox.LastError);
+        Disk.Write(Path.Combine(f.DirectoryPath, "outbox.json"),
+            f.Outbox with { NextAttemptUtc = DateTimeOffset.UtcNow.AddSeconds(-1) }, ProtocolJson.Default.Outbox);
+        Assert.Equal(0, await Program.Main(["--retry", "1", "--state-root", f.Root]));
+        Assert.Equal("pending", f.Outbox.State);
+        Assert.Equal(2, f.Outbox.Attempts);
+        Assert.Equal("AppKeyUnavailable", f.Outbox.LastError);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{\"code\":200,\"body\":true}")]
+    public async Task AppKeyReportRequiresFullBusinessAcknowledgement(string response)
+    {
+        using var f = new Fixture();
+        var variable = "BOWL_APP_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "test-credential");
+        try
+        {
+            f.Request = f.Request with
+            {
+                Report = f.Request.Report with
+                {
+                    Url = "https://localhost/report", AppKeyEnvironmentVariable = variable
+                }
+            };
+            f.Handler.ResponseBody = response;
+            f.Producer("completed");
+            await f.Run();
+            Assert.Equal("pending", f.Outbox.State);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, null); }
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1/report", true)]
+    [InlineData("http://example.invalid/report", false)]
+    [InlineData("https://example.invalid/report", true)]
+    public async Task AppKeyRequiresHttpsExceptLoopback(string url, bool accepted)
+    {
+        using var f = new Fixture();
+        var variable = "BOWL_APP_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "test-credential");
+        try
+        {
+            f.Request = f.Request with { Report = f.Request.Report with
+            {
+                Url = url, AppKeyEnvironmentVariable = variable
+            }};
+            f.Handler.ResponseBody = """{"code":200,"body":true,"isSuccess":true}""";
+            f.Producer("completed");
+            await f.Run();
+            Assert.Equal(accepted ? "acknowledged" : "pending", f.Outbox.State);
+            Assert.Equal(accepted ? 1 : 0, f.Handler.Bodies.Count);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, null); }
     }
 
     [Theory]
@@ -202,7 +390,7 @@ public sealed class SupervisorTests
     }
 
     [Fact]
-    public async Task TimeoutDefersRollbackUntilUpdaterExits_ThenRestoresBeforeNetwork()
+    public async Task TimeoutDefersRollbackUntilUpdaterExits_ThenReportsSafetyFailure()
     {
         using var f = new Fixture();
         f.Request = f.Request with { CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1), AutoRollback = true };
@@ -216,12 +404,13 @@ public sealed class SupervisorTests
         f.Processes.Alive = false;
         f.Handler.BeforeSend = () =>
         {
-            Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
-            Assert.False(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+            Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+            Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
         };
         f.Handler.Status = HttpStatusCode.ServiceUnavailable;
         result = await f.Run();
-        Assert.Equal("succeeded", result.Rollback);
+        Assert.Equal("failed", result.Rollback);
+        Assert.Equal("RecoveryPlanException", result.RollbackError);
         Assert.True(File.Exists(Path.Combine(f.Request.BackupDirectory!, "application.txt")));
         Assert.Equal("pending", f.Outbox.State);
     }
@@ -235,13 +424,13 @@ public sealed class SupervisorTests
         f.Producer("failed", error: new Failure { Category = "updateFailure" });
         var result = await f.Run();
         Assert.Equal("failed", result.Rollback);
-        Assert.Equal("DirectoryNotFoundException", result.RollbackError);
+        Assert.Equal("RecoveryPlanException", result.RollbackError);
         Assert.Equal("acknowledged", f.Outbox.State);
         Assert.Equal(3, f.Outbox.Payload.Status);
     }
 
     [Fact]
-    public async Task RollbackStopsIdentifiedApplication()
+    public async Task UnavailableRollbackDoesNotStopIdentifiedApplication()
     {
         using var f = new Fixture();
         f.Request = f.Request with { AutoRollback = true, LaunchMode = "processAlive" };
@@ -249,12 +438,30 @@ public sealed class SupervisorTests
         f.Snapshot();
         var app = new ProcessIdentity(54321, DateTimeOffset.UtcNow);
         f.Producer("awaitingHealth", app);
-        Assert.Equal("succeeded", (await f.Run()).Rollback);
-        Assert.Equal(app, Assert.Single(f.Processes.Stopped));
+        Assert.Equal("failed", (await f.Run()).Rollback);
+        Assert.Empty(f.Processes.Stopped);
     }
 
     [Fact]
-    public async Task InterruptedRollbackResumesFromDurableJournal()
+    public async Task MissingPlanDoesNotStopApplication()
+    {
+        using var f = new Fixture();
+        f.Request = f.Request with
+        {
+            AutoRollback = true, LaunchMode = "processAlive", RollbackPlan = null
+        };
+        var application = new ProcessIdentity(54321, DateTimeOffset.UtcNow);
+        f.Processes.Alive = false;
+        f.Snapshot();
+        f.Producer("awaitingHealth", application);
+        var result = await f.Run();
+        Assert.Equal("failed", result.Rollback);
+        Assert.Equal("RecoveryPlanException", result.RollbackError);
+        Assert.Empty(f.Processes.Stopped);
+    }
+
+    [Fact]
+    public async Task InterruptedRollbackIsRefusedWithoutModifyingRemainingFiles()
     {
         using var f = new Fixture();
         f.Request = f.Request with { AutoRollback = true };
@@ -266,8 +473,9 @@ public sealed class SupervisorTests
             result with { Rollback = "inProgress" }, ProtocolJson.Default.Result);
         File.Delete(Path.Combine(f.Request.InstallPath, "application.txt"));
         f.Processes.Alive = false;
-        Assert.Equal("succeeded", (await f.Run()).Rollback);
-        Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+        Assert.Equal("failed", (await f.Run()).Rollback);
+        Assert.False(File.Exists(Path.Combine(f.Request.InstallPath, "application.txt")));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
     }
 
     [Fact]

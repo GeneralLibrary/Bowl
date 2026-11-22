@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Bowl.Host.Tests" />
+    <InternalsVisibleTo Include="Bowl.TestPeer" />
     <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\protocol-v1.md" Link="protocol-v1.md" CopyToPublishDirectory="PreserveNewest" />

@@ -1,5 +1,9 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -38,7 +42,7 @@ public sealed class ProcessTests
         "--attempt", f.Request.AttemptId, "--state-root", f.Root);
 
     [Fact]
-    public async Task RealHostCrashCanResumeObservationAndRollbackWithRetainedSnapshot()
+    public async Task RealHostCrashCanResumeObservationAndRefuseUnsafeRollback()
     {
         using var f = new Fixture();
         using var updater = Peer(30_000);
@@ -61,9 +65,9 @@ public sealed class ProcessTests
                 await Wait(resumed);
                 var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
                 Assert.Equal("updaterTerminated", result.Outcome);
-                Assert.Equal("succeeded", result.Rollback);
-                Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
-                Assert.False(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+                Assert.Equal("failed", result.Rollback);
+                Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+                Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
                 Assert.True(File.Exists(Path.Combine(f.Request.BackupDirectory!, "application.txt")));
             }
             finally { Cleanup(resumed); }
@@ -72,6 +76,106 @@ public sealed class ProcessTests
     }
 
     private static ProcessIdentity Identity(Process process) => new(process.Id, process.StartTime.ToUniversalTime());
+
+    [Fact]
+    public async Task LiveUpdaterAndConcurrentUserChangesAreNotOverwritten()
+    {
+        using var f = new Fixture();
+        using var updater = Peer(30_000);
+        f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
+        f.Snapshot();
+        f.Save();
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        using var host = Host(f);
+        try
+        {
+            await Ready(f, host);
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "application.txt"), "user-modified");
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "unknown.txt"), "user-data");
+            Assert.False(host.HasExited);
+            updater.Kill();
+            await Wait(updater);
+            await Wait(host);
+            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
+            Assert.Equal("failed", result.Rollback);
+            Assert.Equal("RecoveryPlanException", result.RollbackError);
+            Assert.Equal("user-modified", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+            Assert.Equal("user-data", File.ReadAllText(Path.Combine(f.Request.InstallPath, "unknown.txt")));
+            Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+        }
+        finally { Cleanup(host); Cleanup(updater); }
+    }
+
+    [Fact]
+    public async Task RealHostRefusesUnsafeRollbackAndReportsFailureToLoopbackServer()
+    {
+        using var f = new Fixture();
+        using var reservation = new TcpListener(IPAddress.Loopback, 0);
+        reservation.Start();
+        var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
+        reservation.Stop();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var variable = "BOWL_REAL_APP_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "real-process-test-secret");
+        using var updater = Peer(30_000);
+        try
+        {
+            f.Request = f.Request with
+            {
+                Updater = Identity(updater), AutoRollback = true,
+                Report = new()
+                {
+                    Url = $"http://127.0.0.1:{port}/report", RecordId = 42,
+                    AppKeyEnvironmentVariable = variable
+                }
+            };
+            f.Snapshot();
+            Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "data"));
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "data", "user.db"), "current-user-data");
+            Directory.CreateDirectory(Path.Combine(f.Request.BackupDirectory!, "data"));
+            File.WriteAllText(Path.Combine(f.Request.BackupDirectory!, "data", "user.db"), "old-user-data");
+            f.Request = f.Request with
+            {
+                RollbackPlan = f.Request.RollbackPlan! with { ProtectedPaths = ["data"] }
+            };
+            f.Save();
+            f.Producer("failed", error: new Failure
+            {
+                Category = "updateFailure", ExceptionType = "System.IO.IOException", HResult = -123
+            });
+            updater.Kill();
+            await Wait(updater);
+            using var host = Host(f);
+            try
+            {
+                var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+                Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+                Assert.Equal("current-user-data", File.ReadAllText(Path.Combine(f.Request.InstallPath, "data", "user.db")));
+                using var reader = new StreamReader(context.Request.InputStream);
+                using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                Assert.Equal("real-process-test-secret", json.RootElement.GetProperty("appKey").GetString());
+                Assert.False(json.RootElement.GetProperty("diagnostics").GetProperty("rollback").GetBoolean());
+                var response = Encoding.UTF8.GetBytes("""{"code":200,"body":true,"isSuccess":true}""");
+                context.Response.ContentLength64 = response.Length;
+                await context.Response.OutputStream.WriteAsync(response);
+                context.Response.Close();
+                await Wait(host);
+                Assert.Equal(1, host.ExitCode);
+                Assert.Equal("acknowledged", f.Outbox.State);
+                Assert.DoesNotContain("real-process-test-secret",
+                    File.ReadAllText(Path.Combine(f.DirectoryPath, "outbox.json")));
+            }
+            finally { Cleanup(host); }
+        }
+        finally
+        {
+            Cleanup(updater);
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
 
     private static async Task Wait(Process process)
     {

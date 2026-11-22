@@ -154,7 +154,10 @@ internal static class Paths
             request.LaunchMode is not ("filesOnly" or "processAlive") ||
             request.HealthTimeoutSeconds is < 1 or > 3600 ||
             request.UpdateTimeoutSeconds is < 1 or > 86400 || request.Report is null ||
-            request.Report.Type is not (1 or 2))
+            request.Report.Type is not (1 or 2) ||
+            request.Report.AppKeyEnvironmentVariable is { } variable &&
+                (string.IsNullOrWhiteSpace(variable) || variable.Length > 256 ||
+                 variable.Any(char.IsControl) || variable.Contains('=')))
             throw new InvalidDataException("Invalid request configuration.");
         if (request.Report.Url is { Length: > 0 } url &&
             (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||

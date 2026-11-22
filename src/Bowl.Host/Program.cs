@@ -9,6 +9,14 @@ internal static class Program
     {
         try
         {
+            if (args.Length == 2 && args[0] == "--controlled-check")
+            {
+                if (!OperatingSystem.IsWindows())
+                    throw new InvalidOperationException("Controlled mode requires Windows.");
+                _ = ControlledConfiguration.Load(args[1]);
+                Console.Error.WriteLine("Controlled execution is not available; no worker was started.");
+                return 2;
+            }
             if (args.Length != 4 || args[2] != "--state-root" ||
                 args[0] is not ("--attempt" or "--retry"))
                 throw new ArgumentException("Use --attempt <GUID> --state-root <absolute-path> or --retry <limit:1-100> --state-root <absolute-path>.");
@@ -78,5 +86,6 @@ internal static class Program
 
     private static bool IsOperational(Exception ex) => ex is IOException or InvalidDataException or
         UnauthorizedAccessException or ArgumentException or JsonException or
-        Win32Exception or InvalidOperationException;
+        Win32Exception or InvalidOperationException or System.Security.SecurityException or
+        System.Security.Principal.IdentityNotMappedException;
 }

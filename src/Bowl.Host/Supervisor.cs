@@ -80,8 +80,8 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
             Disk.Validate(previousRequest, owner.AttemptId);
             Disk.Validate(previousResult, owner.AttemptId);
             if (processes.IsAlive(previousRequest.Updater) ||
-                previousResult.Rollback is not ("notRequested" or "succeeded" or "failed"))
-                throw new InvalidDataException("Previous updater or rollback still owns this installation.");
+                previousResult.Rollback is not ("notRequested" or "succeeded"))
+                throw new InvalidDataException("Previous updater or unresolved rollback still owns this installation.");
         }
         Disk.Write(ownerPath, new Envelope { AttemptId = request.AttemptId }, ProtocolJson.Default.Envelope);
     }
@@ -174,9 +174,11 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
     private static Result Finish(Request request, Producer? producer, string outcome, string verification = "none")
     {
         var error = producer?.Error;
-        if (error != null && request.Report.CredentialEnvironmentVariable is { Length: > 0 } name &&
-            Environment.GetEnvironmentVariable(name) is { Length: > 0 } secret)
+        foreach (var name in new[] { request.Report.CredentialEnvironmentVariable, request.Report.AppKeyEnvironmentVariable })
         {
+            if (error == null || string.IsNullOrEmpty(name) ||
+                Environment.GetEnvironmentVariable(name) is not { Length: > 0 } secret)
+                continue;
             string? Redact(string? text) => text?.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
             error = error with
             {
@@ -213,6 +215,7 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
                     return result with { Rollback = "deferred", RollbackError = "UpdaterStillRunning" };
                 await Task.Delay(100, token);
             }
+            Recovery.EnsureSafetyAvailable();
             var latest = ReadProducer(directory, request);
             var application = latest?.Application ?? result.Application;
             if (application == null && (latest?.Stage ?? result.Stage) is "launching" or "awaitingHealth")
@@ -225,10 +228,10 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
             }
             result = result with { Rollback = "inProgress", RollbackError = null, Application = application };
             Disk.Write(Path.Combine(directory, "result.json"), result, ProtocolJson.Default.Result);
-            Recovery.Restore(request.BackupDirectory!, request.InstallPath);
+            Recovery.Restore(request.BackupDirectory!, request.InstallPath, request.RollbackPlan);
             return result with { Rollback = "succeeded" };
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or UnauthorizedAccessException or
+        catch (Exception ex) when (ex is RecoveryPlanException or IOException or InvalidDataException or JsonException or UnauthorizedAccessException or
                                        Win32Exception or InvalidOperationException or OperationCanceledException)
         {
             Console.Error.WriteLine($"Rollback failed: {ex.GetType().Name}.");

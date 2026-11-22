@@ -133,12 +133,74 @@ public sealed class ProtocolTests
         using var f = new Fixture();
         Directory.CreateDirectory(f.Request.BackupDirectory!);
         File.WriteAllText(Path.Combine(f.Request.InstallPath, "keep.txt"), "keep");
-        Assert.Throws<InvalidDataException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath));
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, f.Request.RollbackPlan));
         Assert.Equal("keep", File.ReadAllText(Path.Combine(f.Request.InstallPath, "keep.txt")));
     }
 
     [Fact]
-    public void NestedSnapshotIsPreservedAndMirrorRemovesExtraDirectories()
+    public async Task MissingRollbackPlanFailsWithoutChangingFiles()
+    {
+        using var f = new Fixture();
+        f.Snapshot();
+        f.Request = f.Request with { AutoRollback = true, RollbackPlan = null };
+        f.Processes.Alive = false;
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        var result = await f.Run();
+        Assert.Equal("failed", result.Rollback);
+        Assert.Equal("RecoveryPlanException", result.RollbackError);
+        Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+    }
+
+    [Fact]
+    public void RollbackLeavesUnknownAndProtectedFilesUntouched()
+    {
+        using var f = new Fixture();
+        f.Snapshot();
+        Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "data"));
+        File.WriteAllText(Path.Combine(f.Request.InstallPath, "data", "user.db"), "current");
+        Directory.CreateDirectory(Path.Combine(f.Request.BackupDirectory!, "data"));
+        File.WriteAllText(Path.Combine(f.Request.BackupDirectory!, "data", "user.db"), "stale");
+        File.WriteAllText(Path.Combine(f.Request.InstallPath, "unknown.txt"), "preserve");
+        var plan = f.Request.RollbackPlan! with { ProtectedPaths = ["data"] };
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, plan));
+        Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+        Assert.Equal("current", File.ReadAllText(Path.Combine(f.Request.InstallPath, "data", "user.db")));
+        Assert.Equal("preserve", File.ReadAllText(Path.Combine(f.Request.InstallPath, "unknown.txt")));
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData(".backups\\snapshot\\application.txt")]
+    [InlineData("data\\user.db")]
+    [InlineData("application.txt")]
+    public void UnsafeRemovalIsRefusedBeforeAnyChanges(string removal)
+    {
+        using var f = new Fixture();
+        f.Snapshot();
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath,
+            new() { RestoreFiles = ["application.txt"], RemoveFiles = [removal], ProtectedPaths = ["data"] }));
+        Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+    }
+
+    [Fact]
+    public void MissingSnapshotFileOrPreviouslyExistingRemovalCannotDeleteAnything()
+    {
+        using var f = new Fixture();
+        f.Snapshot();
+        var plan = new RollbackPlan { RestoreFiles = ["application.txt", "missing.txt"], RemoveFiles = ["new-only.txt"] };
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, plan));
+        File.WriteAllText(Path.Combine(f.Request.BackupDirectory!, "new-only.txt"), "previously existed");
+        plan = plan with { RestoreFiles = ["application.txt"] };
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, plan));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+        Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+    }
+
+    [Fact]
+    public void NestedSnapshotAndExtraDirectoriesArePreservedWithoutFence()
     {
         using var f = new Fixture();
         f.Snapshot();
@@ -146,9 +208,13 @@ public sealed class ProtocolTests
         File.WriteAllText(Path.Combine(f.Request.InstallPath, "extra", "child", "extra.txt"), "remove");
         Directory.CreateDirectory(Path.Combine(f.Request.BackupDirectory!, "nested"));
         File.WriteAllText(Path.Combine(f.Request.BackupDirectory!, "nested", "restore.txt"), "old");
-        Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath);
-        Assert.False(Directory.Exists(Path.Combine(f.Request.InstallPath, "extra")));
-        Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "nested", "restore.txt")));
+        Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, new()
+        {
+            RestoreFiles = ["application.txt", "nested\\restore.txt"],
+            RemoveFiles = ["new-only.txt", "extra\\child\\extra.txt"]
+        }));
+        Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "extra", "child", "extra.txt")));
+        Assert.False(File.Exists(Path.Combine(f.Request.InstallPath, "nested", "restore.txt")));
         Assert.True(File.Exists(Path.Combine(f.Request.BackupDirectory!, "nested", "restore.txt")));
     }
 
@@ -210,7 +276,10 @@ public sealed class ProtocolTests
             Directory.CreateSymbolicLink(link, outside);
         try
         {
-            Assert.Throws<InvalidDataException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath));
+            Assert.Throws<RecoveryPlanException>(() => Recovery.Restore(f.Request.BackupDirectory!, f.Request.InstallPath, new()
+            {
+                RestoreFiles = ["application.txt", "linked\\keep.txt"], RemoveFiles = []
+            }));
             Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
             Assert.Equal("safe", File.ReadAllText(Path.Combine(outside, "keep.txt")));
         }
