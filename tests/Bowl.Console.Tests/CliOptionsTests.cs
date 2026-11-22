@@ -8,6 +8,18 @@ namespace Bowl.Console.Tests;
 /// </summary>
 public class CliOptionsTests : IDisposable
 {
+    [Theory]
+    [InlineData("../other")]
+    [InlineData("..\\other")]
+    [InlineData(".locks")]
+    [InlineData("a:b")]
+    public void Parse_VersionMustBePortableDirectoryName(string version)
+    {
+        var options = WatchOptions.Parse(new[] { "--target-name", "App", "--install-path", "app", "--version", version }, out var errors);
+        Assert.Null(options);
+        Assert.Contains(errors, error => error.Contains("single portable directory name"));
+    }
+
     private readonly string _tempDirectory = Path.Combine(Path.GetTempPath(), $"bowl-cli-tests-{Guid.NewGuid():N}");
 
     public void Dispose()
