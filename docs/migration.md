@@ -67,9 +67,10 @@ references. The original .NET Standard library, callbacks, strategies and tests
 remain compatible. `Bowl.slnx`, independent test dependency versions, host tests,
 CI and root documentation provide standalone build/test/publish entry points.
 
-The host's default metadata-only diagnostics intentionally do not run bundled
-procdump or export system information. Optional legacy diagnostics remain an
-explicit caller choice; no-dump results do not establish health.
+The host's default metadata-only diagnostics do not run bundled procdump or
+export system information. The separate opt-in Windows capture now uses the
+library and bundled procdump as described in `protocol-v1.md`; no-dump results
+do not establish health.
 
 ## Validation and removal gate
 

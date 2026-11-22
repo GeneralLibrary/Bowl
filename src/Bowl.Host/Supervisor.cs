@@ -43,8 +43,29 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
             {
                 AttemptId = attempt, Host = ProcessIdentity.Current()
             }, ProtocolJson.Default.Ready);
-            result = await ObserveAsync(directory, request, token);
-            Disk.Write(resultPath, result, ProtocolJson.Default.Result);
+            var collection = new CrashCollection(root, request);
+            collection.Start(request.Updater);
+            try
+            {
+                result = await ObserveAsync(directory, request, collection, token);
+                Disk.Write(resultPath, result, ProtocolJson.Default.Result);
+            }
+            finally
+            {
+                await collection.StopAsync(result != null && result.Outcome != "success");
+                if (request.CrashCollectionEnabled)
+                {
+                    try
+                    {
+                        Disk.Write(Path.Combine(directory, "capture-status.json"), collection.Status(),
+                            ProtocolJson.Default.CaptureStatus);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                    {
+                        Console.Error.WriteLine($"Crash capture status unavailable: {ex.GetType().Name}.");
+                    }
+                }
+            }
         }
         Disk.Validate(result, attempt);
         if (result.EventId != attempt + "-terminal-v1" || result.Updater != request.Updater ||
@@ -86,7 +107,7 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
         Disk.Write(ownerPath, new Envelope { AttemptId = request.AttemptId }, ProtocolJson.Default.Envelope);
     }
 
-    private async Task<Result> ObserveAsync(string directory, Request request, CancellationToken token)
+    private async Task<Result> ObserveAsync(string directory, Request request, CrashCollection collection, CancellationToken token)
     {
         Producer? producer = null;
         ProcessIdentity? observedApplication = null;
@@ -130,6 +151,7 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
                     observedApplication = application;
                     if (!processes.IsAlive(application))
                         return Finish(request, producer, "healthCheckFailure");
+                    collection.Start(application);
                     health ??= Stopwatch.StartNew();
                     if (health.Elapsed >= TimeSpan.FromSeconds(request.HealthTimeoutSeconds))
                         return Finish(request, producer, "success", "processAlive");

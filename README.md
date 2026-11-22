@@ -11,10 +11,10 @@ This repository contains two independently usable components:
 | `src\Bowl.Host` | .NET 8 | Versioned disk protocol, updater/application supervision, optional rollback and persistent HTTP outbox |
 | `src\GeneralUpdate.Bowl` | .NET Standard 2.0 | Existing diagnostic library, platform strategies, procdump integration and `BowlContext.OnCrash` callback |
 
-The host has no GeneralUpdate project/source dependency and does not depend on
-procdump. It records metadata by default and never collects or uploads dumps.
-The library remains available for applications explicitly opting into richer
-diagnostics; its tool-success result does **not** establish application health.
+The host records metadata by default. An explicit v1 request option enables
+best-effort Windows mini-dump capture using GeneralUpdate.Bowl and the bundled
+procdump; the host never uploads crash artifacts. The diagnostic tool result
+does **not** establish application health.
 
 ## Build, test and deploy
 
@@ -43,7 +43,9 @@ GeneralUpdate's `Monitoring.Enabled` is opt-in. Set `ExecutablePath` to the host
 `DiagnosticsDirectory` to a durable protected state root, and explicitly choose
 `AutoRollback` and `VerifyLaunch`. If enabled monitoring cannot become ready,
 the updater aborts before file modification. No dump is required to detect an
-abnormally terminated updater or failed application startup.
+abnormally terminated updater or failed application startup. Crash collection is
+a separate opt-in and requires a GeneralUpdate client configured to scan the
+state-root crash outbox.
 
 See [the complete protocol and operations guide](docs/protocol-v1.md).
 
