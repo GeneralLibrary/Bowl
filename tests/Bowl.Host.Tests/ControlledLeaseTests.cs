@@ -34,6 +34,20 @@ public sealed class ControlledLeaseTests
             });
             peer.Kill();
             await peer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var lockPath = Assert.Single(Directory.GetFiles(registry, "*.lock"));
+            var deadline = Stopwatch.StartNew();
+            while (true)
+            {
+                try
+                {
+                    using var released = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    break;
+                }
+                catch (IOException) when (deadline.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    await Task.Delay(50);
+                }
+            }
             Assert.Throws<InvalidDataException>(() =>
             {
                 using var unexpected = ControlledLease.Acquire(

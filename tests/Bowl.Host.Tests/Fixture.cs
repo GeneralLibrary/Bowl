@@ -1,4 +1,7 @@
 using System.Net;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -47,6 +50,17 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(Request.InstallPath, "application.txt"), "new");
         File.WriteAllText(Path.Combine(Request.InstallPath, "new-only.txt"), "remove");
     }
+
+    [SupportedOSPlatform("windows")]
+    public static void RestrictFile(string path, SecurityIdentifier user)
+    {
+        var security = new FileSecurity();
+        security.SetOwner(user);
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
+        new FileInfo(path).SetAccessControl(security);
+    }
+
     public void Dispose()
     {
         client.Dispose();

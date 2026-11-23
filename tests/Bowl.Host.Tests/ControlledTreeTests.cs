@@ -37,8 +37,10 @@ public sealed class ControlledTreeTests
             PropagationFlags.None, AccessControlType.Allow));
         new DirectoryInfo(f.Request.InstallPath).SetAccessControl(security);
         var nested = Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "nested")).FullName;
+        new DirectoryInfo(nested).SetAccessControl(security);
         var file = Path.Combine(nested, "file.txt");
         File.WriteAllText(file, "content");
+        Fixture.RestrictFile(file, user);
         using (ControlledTree.HoldSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => File.Move(file, file + ".moved"));
@@ -62,10 +64,13 @@ public sealed class ControlledTreeTests
             PropagationFlags.None, AccessControlType.Allow));
         new DirectoryInfo(f.Request.InstallPath).SetAccessControl(security);
         var nested = Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "nested")).FullName;
+        new DirectoryInfo(nested).SetAccessControl(security);
         var target = Path.Combine(nested, "file.txt");
         var staged = Path.Combine(nested, "staged.txt");
         File.WriteAllText(target, "old");
         File.WriteAllText(staged, "new");
+        Fixture.RestrictFile(target, user);
+        Fixture.RestrictFile(staged, user);
         using (ControlledTree.HoldMutationSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => Directory.Move(nested, nested + ".moved"));
@@ -92,6 +97,7 @@ public sealed class ControlledTreeTests
         var file = Path.Combine(f.Request.InstallPath, "data.txt");
         var link = Path.Combine(f.Request.InstallPath, "hardlink.txt");
         File.WriteAllText(file, "data");
+        Fixture.RestrictFile(file, user);
         Assert.True(CreateHardLink(link, file, IntPtr.Zero));
         var trusted = new HashSet<SecurityIdentifier> { user };
         Assert.Throws<InvalidDataException>(() =>
