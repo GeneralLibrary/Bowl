@@ -75,6 +75,82 @@ public sealed class ProcessTests
         finally { Cleanup(first); Cleanup(updater); }
     }
 
+    [Fact]
+    public async Task UncooperativeWriterSurvivesHostCrashAndRecoveryRemainsClosed()
+    {
+        using var f = new Fixture();
+        using var updater = Peer(30_000);
+        f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
+        f.Snapshot();
+        f.Save();
+        f.Producer("filesApplying");
+        var target = Path.Combine(f.Request.InstallPath, "application.txt");
+        var peerPath = Path.Combine(Repository, "tests", "Bowl.TestPeer", "bin", Configuration,
+            "net8.0", "Bowl.TestPeer.dll");
+        var writerStart = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true
+        };
+        foreach (var argument in new[] { peerPath, "uncooperative-writer", target })
+            writerStart.ArgumentList.Add(argument);
+        using var writer = Process.Start(writerStart)!;
+        using var first = Host(f);
+        try
+        {
+            Assert.Equal("WRITER_READY",
+                await writer.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+            await Ready(f, first);
+            await writer.StandardInput.WriteLineAsync("live-external-change");
+            await writer.StandardInput.FlushAsync();
+            Assert.Equal("WRITE_COMPLETE",
+                await writer.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal("live-external-change", File.ReadAllText(target));
+            first.Kill();
+            await Wait(first);
+            updater.Kill();
+            await Wait(updater);
+            await writer.StandardInput.WriteLineAsync("external-change");
+            await writer.StandardInput.FlushAsync();
+            Assert.Equal("WRITE_COMPLETE",
+                await writer.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+
+            using (var resumed = Host(f))
+            {
+                try
+                {
+                    await Wait(resumed);
+                    Assert.Equal(1, resumed.ExitCode);
+                    var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
+                    Assert.Equal("updaterTerminated", result.Outcome);
+                    Assert.Equal("failed", result.Rollback);
+                    Assert.Equal("RecoveryPlanException", result.RollbackError);
+                    Assert.Equal("external-change", File.ReadAllText(target));
+                    Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+                    Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.BackupDirectory!, "application.txt")));
+                }
+                finally { Cleanup(resumed); }
+            }
+
+            var oldAttempt = f.Request.AttemptId;
+            f.Request = f.Request with { AttemptId = Guid.NewGuid().ToString("D"), CreatedAtUtc = DateTimeOffset.UtcNow };
+            Directory.CreateDirectory(f.DirectoryPath);
+            f.Save();
+            f.Producer("completed");
+            using var next = Host(f);
+            try
+            {
+                await Wait(next);
+                Assert.Equal(2, next.ExitCode);
+                Assert.False(File.Exists(Path.Combine(f.DirectoryPath, "ready.json")));
+                Assert.True(File.Exists(Path.Combine(f.Root, "attempts", oldAttempt, "result.json")));
+                Assert.Equal("external-change", File.ReadAllText(target));
+                Assert.False(writer.HasExited);
+            }
+            finally { Cleanup(next); }
+        }
+        finally { Cleanup(first); Cleanup(updater); Cleanup(writer); }
+    }
+
     private static ProcessIdentity Identity(Process process) => new(process.Id, process.StartTime.ToUniversalTime());
 
     [Fact]

@@ -40,5 +40,14 @@ else if (args.Length == 5 && args[0] == "lease")
     Console.WriteLine("LEASE_ACQUIRED");
     await Task.Delay(TimeSpan.FromMinutes(1));
 }
+else if (args.Length == 2 && args[0] == "uncooperative-writer")
+{
+    Console.WriteLine("WRITER_READY");
+    while (await Console.In.ReadLineAsync() is { } content)
+    {
+        await File.WriteAllTextAsync(args[1], content);
+        Console.WriteLine("WRITE_COMPLETE");
+    }
+}
 else
     await Task.Delay(int.Parse(args[0], System.Globalization.CultureInfo.InvariantCulture));
