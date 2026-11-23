@@ -41,6 +41,8 @@ public sealed class ControlledTreeTests
         var file = Path.Combine(nested, "file.txt");
         File.WriteAllText(file, "content");
         Fixture.RestrictFile(file, user);
+        foreach (var path in new[] { f.Request.InstallPath, nested, file })
+            Fixture.AssertRestricted(path, user);
         using (ControlledTree.HoldSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => File.Move(file, file + ".moved"));
@@ -71,6 +73,8 @@ public sealed class ControlledTreeTests
         File.WriteAllText(staged, "new");
         Fixture.RestrictFile(target, user);
         Fixture.RestrictFile(staged, user);
+        foreach (var path in new[] { f.Request.InstallPath, nested, target, staged })
+            Fixture.AssertRestricted(path, user);
         using (ControlledTree.HoldMutationSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => Directory.Move(nested, nested + ".moved"));

@@ -61,6 +61,18 @@ internal sealed class Fixture : IDisposable
         new FileInfo(path).SetAccessControl(security);
     }
 
+    [SupportedOSPlatform("windows")]
+    public static void AssertRestricted(string path, SecurityIdentifier user)
+    {
+        var attributes = File.GetAttributes(path);
+        FileSystemSecurity security = (attributes & FileAttributes.Directory) != 0
+            ? new DirectoryInfo(path).GetAccessControl()
+            : new FileInfo(path).GetAccessControl();
+        var descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
+        Assert.True(ControlledAcl.IsRestricted(descriptor, new HashSet<SecurityIdentifier> { user }),
+            $"Fixture entry {path} is not restricted: {security.GetSecurityDescriptorSddlForm(AccessControlSections.All)}");
+    }
+
     public void Dispose()
     {
         client.Dispose();
