@@ -463,11 +463,11 @@ public class BowlTests
         : LiteralProcess("/bin/sh", "-c \"exit 0\"");
 
     private static ProcessStartInfo SleepTenProcess() => OperatingSystem.IsWindows()
-        ? LiteralProcess("powershell.exe", "-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 10\"")
+        ? LiteralProcess("cmd.exe", "/c timeout 10")
         : LiteralProcess("/bin/sh", "-c \"sleep 10\"");
 
     private static ProcessStartInfo SleepFiveProcess() => OperatingSystem.IsWindows()
-        ? LiteralProcess("powershell.exe", "-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 5\"")
+        ? LiteralProcess("cmd.exe", "/c timeout 5")
         : LiteralProcess("/bin/sh", "-c \"sleep 5\"");
 
     private static ProcessStartInfo LiteralProcess(string fileName, string arguments)

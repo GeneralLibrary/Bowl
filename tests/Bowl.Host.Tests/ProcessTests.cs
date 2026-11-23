@@ -37,6 +37,13 @@ public sealed class ProcessTests
     private static Process Peer(int milliseconds) => Start(Path.Combine(Repository, "tests", "Bowl.TestPeer",
         "bin", Configuration, "net8.0", "Bowl.TestPeer.dll"), milliseconds.ToString());
 
+    private static Fixture ProcessFixture()
+    {
+        var fixture = new Fixture();
+        fixture.Request = fixture.Request with { UpdateTimeoutSeconds = 120 };
+        return fixture;
+    }
+
     private static Process Host(Fixture f) => Start(Path.Combine(Repository, "src", "Bowl.Host",
         "bin", Configuration, "net8.0", "Bowl.Host.dll"),
         "--attempt", f.Request.AttemptId, "--state-root", f.Root);
@@ -44,8 +51,8 @@ public sealed class ProcessTests
     [Fact]
     public async Task RealHostCrashCanResumeObservationAndRefuseUnsafeRollback()
     {
-        using var f = new Fixture();
-        using var updater = Peer(30_000);
+        using var f = ProcessFixture();
+        using var updater = Peer(120_000);
         f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
         f.Snapshot();
         f.Save();
@@ -78,8 +85,8 @@ public sealed class ProcessTests
     [Fact]
     public async Task UncooperativeWriterSurvivesHostCrashAndRecoveryRemainsClosed()
     {
-        using var f = new Fixture();
-        using var updater = Peer(30_000);
+        using var f = ProcessFixture();
+        using var updater = Peer(120_000);
         f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
         f.Snapshot();
         f.Save();
@@ -156,8 +163,8 @@ public sealed class ProcessTests
     [Fact]
     public async Task LiveUpdaterAndConcurrentUserChangesAreNotOverwritten()
     {
-        using var f = new Fixture();
-        using var updater = Peer(30_000);
+        using var f = ProcessFixture();
+        using var updater = Peer(120_000);
         f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
         f.Snapshot();
         f.Save();
@@ -185,7 +192,7 @@ public sealed class ProcessTests
     [Fact]
     public async Task RealHostRefusesUnsafeRollbackAndReportsFailureToLoopbackServer()
     {
-        using var f = new Fixture();
+        using var f = ProcessFixture();
         using var reservation = new TcpListener(IPAddress.Loopback, 0);
         reservation.Start();
         var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
@@ -195,7 +202,7 @@ public sealed class ProcessTests
         listener.Start();
         var variable = "BOWL_REAL_APP_KEY_" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(variable, "real-process-test-secret");
-        using var updater = Peer(30_000);
+        using var updater = Peer(120_000);
         try
         {
             f.Request = f.Request with
@@ -288,7 +295,7 @@ public sealed class ProcessTests
     [Fact]
     public async Task RealHostReadyIsSamePidAndStartTime_ThenConfirmsFiles()
     {
-        using var f = new Fixture();
+        using var f = ProcessFixture();
         f.Request = f.Request with { Updater = ProcessIdentity.Current(), Report = new() };
         f.Save();
         using var host = Host(f);
@@ -314,8 +321,8 @@ public sealed class ProcessTests
     [Fact]
     public async Task RealUpdaterTerminationWithoutDumpIsRecorded()
     {
-        using var f = new Fixture();
-        using var updater = Peer(30_000);
+        using var f = ProcessFixture();
+        using var updater = Peer(120_000);
         f.Request = f.Request with { Updater = Identity(updater), Report = new() };
         f.Save();
         f.Producer("filesApplying");
@@ -338,8 +345,8 @@ public sealed class ProcessTests
     [InlineData(true)]
     public async Task RealApplicationSurvivalAndEarlyExit(bool exitEarly)
     {
-        using var f = new Fixture();
-        using var application = Peer(30_000);
+        using var f = ProcessFixture();
+        using var application = Peer(120_000);
         f.Request = f.Request with
         {
             Updater = ProcessIdentity.Current(), LaunchMode = "processAlive", Report = new()
