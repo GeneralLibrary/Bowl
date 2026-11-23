@@ -37,7 +37,7 @@ public sealed class ControlledTreeTests
             PropagationFlags.None, AccessControlType.Allow));
         new DirectoryInfo(f.Request.InstallPath).SetAccessControl(security);
         var nested = Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "nested")).FullName;
-        new DirectoryInfo(nested).SetAccessControl(security);
+        Fixture.RestrictDirectory(nested, user);
         var file = Path.Combine(nested, "file.txt");
         File.WriteAllText(file, "content");
         Fixture.RestrictFile(file, user);
@@ -66,7 +66,7 @@ public sealed class ControlledTreeTests
             PropagationFlags.None, AccessControlType.Allow));
         new DirectoryInfo(f.Request.InstallPath).SetAccessControl(security);
         var nested = Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "nested")).FullName;
-        new DirectoryInfo(nested).SetAccessControl(security);
+        Fixture.RestrictDirectory(nested, user);
         var target = Path.Combine(nested, "file.txt");
         var staged = Path.Combine(nested, "staged.txt");
         File.WriteAllText(target, "old");

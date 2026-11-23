@@ -52,6 +52,18 @@ internal sealed class Fixture : IDisposable
     }
 
     [SupportedOSPlatform("windows")]
+    public static void RestrictDirectory(string path, SecurityIdentifier user)
+    {
+        var security = new DirectorySecurity();
+        security.SetOwner(user);
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(path).SetAccessControl(security);
+    }
+
+    [SupportedOSPlatform("windows")]
     public static void RestrictFile(string path, SecurityIdentifier user)
     {
         var security = new FileSecurity();
