@@ -40,6 +40,23 @@ public class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_CapturesBothStreamsBeforeReturning()
+    {
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            var startInfo = OperatingSystem.IsWindows()
+                ? LiteralProcess("cmd", "/c \"@for /L %i in (1,1,100) do @(echo stdout& echo stderr 1>&2)\"")
+                : LiteralProcess("/bin/sh", "-c \"i=0; while [ $i -lt 100 ]; do echo stdout; echo stderr >&2; i=$((i+1)); done\"");
+
+            var result = await ProcessRunner.RunAsync(startInfo, timeoutMs: 10000);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(100, result.OutputLines.Count(line => line.Trim() == "stdout"));
+            Assert.Equal(100, result.OutputLines.Count(line => line.Trim() == "stderr"));
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_OutputLines_IsNotNull()
     {
         var result = await ProcessRunner.RunAsync(ShellEchoHello(), timeoutMs: 10000);

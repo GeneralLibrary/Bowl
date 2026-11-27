@@ -279,8 +279,7 @@ internal sealed class SupervisorLoop
     ///     fixed-name <c>on-crash.cmd</c> / <c>on-crash.sh</c> deployed next to the
     ///     watchdog; the evidence directory travels via the child-only
     ///     <c>BOWL_EVIDENCE_DIRECTORY</c> environment variable, never as a command-line argument.
-    ///     literal, so operator data is never interpolated into a process command
-    ///     line. (Replaces the removed AutoRestore: users wire their own restore
+    ///     (Replaces the removed AutoRestore: users wire their own restore
     ///     script and own the risk.) Failures are logged, never propagated — the
     ///     evidence is already safely on disk.
     /// </summary>
@@ -304,7 +303,7 @@ internal sealed class SupervisorLoop
             var startInfo = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/sh",
-                Arguments = isWindows ? "/c on-crash.cmd" : "on-crash.sh",
+                Arguments = isWindows ? @"/c .\on-crash.cmd" : "on-crash.sh",
                 WorkingDirectory = scriptDirectory,
                 UseShellExecute = false,
             };
@@ -322,9 +321,13 @@ internal sealed class SupervisorLoop
                 process.WaitForExit();
                 GeneralTracer.Warn("SupervisorLoop: on-crash hook timed out after 60s and was killed.");
             }
-            else
+            else if (process.ExitCode == 0)
             {
                 GeneralTracer.Info($"SupervisorLoop: on-crash hook finished (code {process.ExitCode}).");
+            }
+            else
+            {
+                GeneralTracer.Warn($"SupervisorLoop: on-crash hook failed (code {process.ExitCode}).");
             }
         }
         catch (Exception ex)
