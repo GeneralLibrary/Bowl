@@ -240,7 +240,9 @@ public sealed class ProcessTests
     {
         using var f = new Fixture();
         using var updater = Peer(30_000);
-        f.Request = f.Request with { Updater = Identity(updater), Report = new() };
+        // Slower runners may take seconds to observe the killed peer; keep the
+        // default five-second window from swallowing the outcome as updateTimeout.
+        f.Request = f.Request with { Updater = Identity(updater), Report = new(), UpdateTimeoutSeconds = 60 };
         f.Save();
         f.Producer("filesApplying");
         using var host = Host(f);
