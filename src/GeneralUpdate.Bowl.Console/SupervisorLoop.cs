@@ -100,21 +100,36 @@ internal sealed class SupervisorLoop
                 // Target found — the idle window is irrelevant until it disappears again.
                 lastSeen = DateTime.UtcNow;
 
-                var session = await SuperviseSessionAsync(target, stopCts.Token);
-                if (session.Crash)
+                OutboxSession? lease;
+                try
                 {
-                    await CollectEvidenceAsync(session, stopCts.Token);
-                    RunOnCrashHook(session.Directory, _onCrashCommand, AppContext.BaseDirectory);
-                    _outbox.CollectGarbage(); // crash produced a case — enforce retention now
+                    lease = _outbox.CreateSession();
                 }
-                else
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // Normal exit produces no evidence (§2.3); the pre-created session directory
-                    // must not linger and masquerade as a pending case.
-                    _outbox.RemoveSessionIfEmpty(session.Directory);
-                    GeneralTracer.Info(session.Outcome.TargetExitCode is null
-                        ? "SupervisorLoop: target exit status unavailable — no crash evidence, re-arming."
-                        : $"SupervisorLoop: target exited normally (code {session.Outcome.TargetExitCode}) — no evidence, re-arming.");
+                    GeneralTracer.Error("SupervisorLoop: cannot create evidence session; continuing with exit-code monitoring.", ex);
+                    lease = null;
+                }
+
+                using (lease)
+                {
+                    var session = await SuperviseSessionAsync(target, lease?.Directory, stopCts.Token);
+                    if (session.Crash && lease != null)
+                    {
+                        await CollectEvidenceAsync(session, stopCts.Token);
+                        PublishEvidence(session.Directory!, session.Outcome, _onCrashCommand, AppContext.BaseDirectory);
+                        _outbox.CollectGarbage();
+                    }
+                    else
+                    {
+                        if (lease != null) _outbox.RemoveSessionIfEmpty(lease.Directory);
+                        if (session.Crash)
+                            GeneralTracer.Warn("SupervisorLoop: crash detected without an evidence session; evidence was not captured.");
+                        else
+                            GeneralTracer.Info(session.Outcome.TargetExitCode is null
+                                ? "SupervisorLoop: target exit status unavailable — no crash evidence, re-arming."
+                                : $"SupervisorLoop: target exited normally (code {session.Outcome.TargetExitCode}) — no evidence, re-arming.");
+                    }
                 }
 
                 // Re-arm: the loop continues and re-attaches when the user restarts the app.
@@ -173,29 +188,30 @@ internal sealed class SupervisorLoop
 
     // ── One session ─────────────────────────────────────────────────────
 
-    private sealed record SessionResult(string Directory, bool Crash, WatchOutcome Outcome);
+    internal sealed record SessionResult(string? Directory, bool Crash, WatchOutcome Outcome);
 
-    private async Task<SessionResult> SuperviseSessionAsync(Process target, CancellationToken ct)
+    internal async Task<SessionResult> SuperviseSessionAsync(Process target, string? sessionDirectory, CancellationToken ct)
     {
-        var sessionDirectory = _outbox.CreateSessionDirectory();
-        var context = BuildContext(sessionDirectory, target.Id);
         GeneralTracer.Info(
-            $"SupervisorLoop: session started (PID {target.Id}) — evidence directory {sessionDirectory}.");
+            $"SupervisorLoop: session started (PID {target.Id}) — evidence directory {sessionDirectory ?? "(unavailable)"}.");
 
         try
         {
-            var outcome = await _watcher.WaitAsync(target, context, ct);
+            var outcome = sessionDirectory == null
+                ? await ExitCodeWatcher.WaitTargetAsync(target, ct)
+                : await _watcher.WaitAsync(target, BuildContext(sessionDirectory, target.Id), ct);
             var crash = outcome.DumpPath != null ||
                 (outcome.TargetExitCode is int code && ExitCodeWatcherStrategy.IsCrashExitCode(code));
             if (!crash && outcome.TargetExitCode is null)
                 GeneralTracer.Warn("SupervisorLoop: target exit status unavailable and no dump found; crash verdict unknown.");
             return new SessionResult(sessionDirectory, crash, outcome);
         }
+
         catch (OperationCanceledException)
         {
             // The session was interrupted (stop signal / shutdown): the pre-created
             // session directory holds no evidence and must not linger as a look-alike case.
-            _outbox.RemoveSessionIfEmpty(sessionDirectory);
+            if (sessionDirectory != null) _outbox.RemoveSessionIfEmpty(sessionDirectory);
             throw;
         }
         catch (Exception ex)
@@ -207,11 +223,28 @@ internal sealed class SupervisorLoop
         }
     }
 
+    internal bool PublishEvidence(string directory, WatchOutcome outcome, string? command, string scriptDirectory)
+    {
+        if (!RunOnCrashHook(directory, command, scriptDirectory))
+        {
+            GeneralTracer.Warn($"SupervisorLoop: hook termination not confirmed; case remains unpublished: {directory}.");
+            return false;
+        }
+        try
+        {
+            _outbox.WriteManifest(directory, outcome);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            GeneralTracer.Error($"SupervisorLoop: manifest publication failed; case remains unpublished: {directory}.", ex);
+            return false;
+        }
+    }
+
     /// <summary>
     ///     Evidence pipeline for a crashed session: crash report + system info + dump (already
-    ///     in the session directory by construction) + manifest. Every artifact is best-effort —
-    ///     a failing piece degrades evidence quality but the manifest is always written so the
-    ///     case stays deliverable.
+    ///     in the session directory by construction). Publishing follows the hook.
     /// </summary>
     private async Task CollectEvidenceAsync(SessionResult session, CancellationToken ct)
     {
@@ -219,7 +252,7 @@ internal sealed class SupervisorLoop
             $"SupervisorLoop: CRASH detected (exitCode={session.Outcome.TargetExitCode}, " +
             $"dump={(session.Outcome.DumpPath != null ? "captured" : "unavailable")}) — collecting evidence.");
 
-        var context = BuildContext(session.Directory, pid: 0);
+        var context = BuildContext(session.Directory!, pid: 0);
 
         // 1. Crash report JSON ({version}_fail.json) — the library's reporter.
         try
@@ -235,16 +268,13 @@ internal sealed class SupervisorLoop
         // 2. System information (sysinfo) — platform provider, non-fatal on failure.
         try
         {
-            await SystemInfoProviderFactory.Create().ExportAsync(session.Directory, ct);
+            await SystemInfoProviderFactory.Create().ExportAsync(session.Directory!, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             GeneralTracer.Error("SupervisorLoop: system info export failed.", ex);
         }
-
-        // 3. Manifest LAST: directory becomes visible as pending only once complete.
-        _outbox.WriteManifest(session.Directory, session.Outcome);
     }
 
     /// <summary>Library context for one session. WorkModel is always "Normal": Bowl collects
@@ -279,13 +309,11 @@ internal sealed class SupervisorLoop
     ///     fixed-name <c>on-crash.cmd</c> / <c>on-crash.sh</c> deployed next to the
     ///     watchdog; the evidence directory travels via the child-only
     ///     <c>BOWL_EVIDENCE_DIRECTORY</c> environment variable, never as a command-line argument.
-    ///     (Replaces the removed AutoRestore: users wire their own restore
-    ///     script and own the risk.) Failures are logged, never propagated — the
-    ///     evidence is already safely on disk.
+    ///     A failed hook leaves the case unpublished for operator recovery.
     /// </summary>
-    internal static void RunOnCrashHook(string evidenceDirectory, string? onCrashCommand, string scriptDirectory)
+    internal static bool RunOnCrashHook(string evidenceDirectory, string? onCrashCommand, string scriptDirectory)
     {
-        if (string.IsNullOrWhiteSpace(onCrashCommand)) return;
+        if (string.IsNullOrWhiteSpace(onCrashCommand)) return true;
 
         try
         {
@@ -296,14 +324,14 @@ internal sealed class SupervisorLoop
             {
                 GeneralTracer.Warn(
                     $"SupervisorLoop: on-crash hook script not found at {hookScript} — hook not run.");
-                return;
+                return false;
             }
 
             GeneralTracer.Info($"SupervisorLoop: on-crash hook starting ({onCrashCommand}).");
             var startInfo = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/sh",
-                Arguments = isWindows ? @"/c .\on-crash.cmd" : "on-crash.sh",
+                Arguments = isWindows ? "/d /c .\\on-crash.cmd" : "on-crash.sh",
                 WorkingDirectory = scriptDirectory,
                 UseShellExecute = false,
             };
@@ -312,7 +340,7 @@ internal sealed class SupervisorLoop
             if (process == null)
             {
                 GeneralTracer.Warn("SupervisorLoop: on-crash hook could not be started.");
-                return;
+                return false;
             }
 
             if (!process.WaitForExit(60_000))
@@ -320,19 +348,23 @@ internal sealed class SupervisorLoop
                 process.Kill(entireProcessTree: true);
                 process.WaitForExit();
                 GeneralTracer.Warn("SupervisorLoop: on-crash hook timed out after 60s and was killed.");
+                return false;
             }
             else if (process.ExitCode == 0)
             {
-                GeneralTracer.Info($"SupervisorLoop: on-crash hook finished (code {process.ExitCode}).");
+                if (process.ExitCode != 0)
+                {
+                    GeneralTracer.Warn($"SupervisorLoop: on-crash hook failed (code {process.ExitCode}).");
+                    return false;
+                }
+                GeneralTracer.Info("SupervisorLoop: on-crash hook finished (code 0).");
             }
-            else
-            {
-                GeneralTracer.Warn($"SupervisorLoop: on-crash hook failed (code {process.ExitCode}).");
-            }
+            return true;
         }
         catch (Exception ex)
         {
             GeneralTracer.Error("SupervisorLoop: on-crash hook failed.", ex);
+            return false;
         }
     }
 }

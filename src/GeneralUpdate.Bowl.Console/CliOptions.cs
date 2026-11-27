@@ -135,6 +135,11 @@ internal sealed class WatchOptions
             errors.Add("--install-path is required (watched application install root).");
         if (string.IsNullOrWhiteSpace(options.Version))
             errors.Add("--version is required (watched application version).");
+        else if (options.Version is "." or ".." ||
+                 options.Version.Equals(".locks", StringComparison.OrdinalIgnoreCase) ||
+                 options.Version.IndexOfAny(new[] { '/', '\\', ':', '*', '?', '"', '<', '>', '|' }) >= 0 ||
+                 options.Version.Any(char.IsControl) || options.Version.EndsWith(' ') || options.Version.EndsWith('.'))
+            errors.Add("--version must be a single portable directory name.");
         if (options.Schema != SupportedSchema)
             errors.Add($"Unsupported --schema {options.Schema} (this build speaks schema {SupportedSchema}).");
         if (!IsKnownDumpType(options.DumpType))
