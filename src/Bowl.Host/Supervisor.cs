@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.ComponentModel;
 using System.Text.Json;
 
@@ -237,7 +237,10 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
                     return result with { Rollback = "deferred", RollbackError = "UpdaterStillRunning" };
                 await Task.Delay(100, token);
             }
-            Recovery.EnsureSafetyAvailable();
+
+            // Refuse before touching any process: a guarded rollback must not stop
+            // the application it would fail to restore.
+            Recovery.EnsureRollbackPossible();
             var latest = ReadProducer(directory, request);
             var application = latest?.Application ?? result.Application;
             if (application == null && (latest?.Stage ?? result.Stage) is "launching" or "awaitingHealth")
@@ -257,7 +260,11 @@ internal sealed class Supervisor(IProcesses processes, Delivery delivery, TimeSp
                                        Win32Exception or InvalidOperationException or OperationCanceledException)
         {
             Console.Error.WriteLine($"Rollback failed: {ex.GetType().Name}.");
-            return result with { Rollback = "failed", RollbackError = ex.GetType().Name };
+            // Cancellation (host shutdown) is recoverable, unlike a real rollback failure:
+        // persist as deferred so RecoverAsync may resume the half-applied attempt.
+        if (ex is OperationCanceledException)
+            return result with { Rollback = "deferred", RollbackError = ex.GetType().Name };
+        return result with { Rollback = "failed", RollbackError = ex.GetType().Name };
         }
     }
 }

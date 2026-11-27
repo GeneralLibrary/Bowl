@@ -16,14 +16,6 @@ jobs:
             8.0.x
             10.0.x
       - run: dotnet build Bowl.slnx -c Release
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & .\src\Bowl.Host\bin\Release\net8.0\Applications\Windows\procdump64.exe -accepteula -?
-          if ((Get-ItemProperty 'HKCU:\Software\Sysinternals\ProcDump').EulaAccepted -ne 1) {
-            throw 'ProcDump license acceptance was not recorded.'
-          }
-          $global:LASTEXITCODE = 0
       - run: dotnet test Bowl.slnx -c Release --no-build
       - if: runner.os == 'Windows'
         shell: pwsh

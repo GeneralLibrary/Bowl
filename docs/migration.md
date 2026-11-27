@@ -35,7 +35,6 @@ Intentional edits to imported files:
 | `src\GeneralUpdate.Bowl\Strategies\StrategyFactory.cs` | Added `CreateWithFallback(out WatcherTier)` three-tier watcher probing (procdump → runtime createdump → exit-code fallback) for the console supervisor; `Create()` and the embedded single-shot API are unchanged |
 | `src\GeneralUpdate.Bowl\Strategies\ProcessRunner.cs` | Wait for stdout and stderr to drain before returning captured output, subject to the existing timeout and cancellation |
 | `src\GeneralUpdate.Bowl\Strategies\WindowsBowlStrategy.cs` | Resolve procdump from the watchdog directory before the target installation |
-| `src\GeneralUpdate.Bowl\Strategies\ProcessRunner.cs` | Drain asynchronous output handlers before returning the process output |
 | `src\GeneralUpdate.Bowl\Applications\Windows\export.bat` | Accept the evidence directory via a per-process environment variable or manual argument |
 | `src\GeneralUpdate.Bowl\Internal\WindowsSystemInfoProvider.cs` | Launch export with a child-specific working directory and environment |
 | `src\GeneralUpdate.Bowl\Tracer\GeneralTracer.cs` | Fall back to console logging when file initialization or rotation fails |
@@ -49,7 +48,7 @@ Intentional edits to imported files:
 
 New files added alongside the import (not part of the 61 migrated entries):
 `src\GeneralUpdate.Bowl\InternalsVisibleTo.cs` (friend assemblies `bowl` and
-`Bowl.Console.Tests` and `Bowl.Host`), `src\GeneralUpdate.Bowl\Strategies\WatcherTier.cs`,
+`Bowl.Console.Tests`), `src\GeneralUpdate.Bowl\Strategies\WatcherTier.cs`,
 `src\GeneralUpdate.Bowl\Strategies\ExitCodeWatcherStrategy.cs`,
 `src\GeneralUpdate.Bowl\Strategies\CreatedumpStrategy.cs`, and the console
 project `src\GeneralUpdate.Bowl.Console` with its test project
@@ -69,10 +68,9 @@ references. The original .NET Standard library, callbacks, strategies and tests
 remain compatible. `Bowl.slnx`, independent test dependency versions, host tests,
 CI and root documentation provide standalone build/test/publish entry points.
 
-The host's default metadata-only diagnostics do not run bundled procdump or
-export system information. The separate opt-in Windows capture now uses the
-library and bundled procdump as described in `protocol-v1.md`; no-dump results
-do not establish health.
+The host's default metadata-only diagnostics intentionally do not run bundled
+procdump or export system information. Optional legacy diagnostics remain an
+explicit caller choice; no-dump results do not establish health.
 
 ## Validation and removal gate
 

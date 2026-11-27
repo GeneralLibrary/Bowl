@@ -1,7 +1,4 @@
 using System.Net;
-using System.Runtime.Versioning;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -50,41 +47,6 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(Request.InstallPath, "application.txt"), "new");
         File.WriteAllText(Path.Combine(Request.InstallPath, "new-only.txt"), "remove");
     }
-
-    [SupportedOSPlatform("windows")]
-    public static void RestrictDirectory(string path, SecurityIdentifier user)
-    {
-        var security = new DirectorySecurity();
-        security.SetOwner(user);
-        security.SetAccessRuleProtection(true, false);
-        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-            PropagationFlags.None, AccessControlType.Allow));
-        new DirectoryInfo(path).SetAccessControl(security);
-    }
-
-    [SupportedOSPlatform("windows")]
-    public static void RestrictFile(string path, SecurityIdentifier user)
-    {
-        var security = new FileSecurity();
-        security.SetOwner(user);
-        security.SetAccessRuleProtection(true, false);
-        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
-        new FileInfo(path).SetAccessControl(security);
-    }
-
-    [SupportedOSPlatform("windows")]
-    public static void AssertRestricted(string path, SecurityIdentifier user)
-    {
-        var attributes = File.GetAttributes(path);
-        FileSystemSecurity security = (attributes & FileAttributes.Directory) != 0
-            ? new DirectoryInfo(path).GetAccessControl()
-            : new FileInfo(path).GetAccessControl();
-        var descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
-        Assert.True(ControlledAcl.IsRestricted(descriptor, new HashSet<SecurityIdentifier> { user }),
-            $"Fixture entry {path} is not restricted: {security.GetSecurityDescriptorSddlForm(AccessControlSections.All)}");
-    }
-
     public void Dispose()
     {
         client.Dispose();

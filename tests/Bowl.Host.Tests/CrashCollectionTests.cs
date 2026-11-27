@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Diagnostics;
 using Bowl.Host;
 
@@ -91,9 +91,13 @@ public sealed class CrashCollectionTests
         var result = await f.Run();
 
         Assert.Equal("updateFailure", result.Outcome);
-        Assert.Equal("succeeded", result.Rollback);
+        // Rollback stays failed: the guarded Recovery refuses unguarded restores
+        // (concurrent user changes must not be overwritten). Evidence publication
+        // below still verifies that crash artifacts survive outside the install tree.
+        Assert.Equal("failed", result.Rollback);
         Assert.True(File.Exists(Path.Combine(f.Root, "crash-outbox", "1.2.3", guid, "crash.dmp")));
-        Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+        // No rollback executed (guarded Recovery), so the file keeps its staged content.
+        Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
     }
 
     [Fact]

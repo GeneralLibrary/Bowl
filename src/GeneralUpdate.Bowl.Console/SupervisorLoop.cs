@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using GeneralUpdate.Bowl;
 using GeneralUpdate.Bowl.Internal;
@@ -350,14 +350,10 @@ internal sealed class SupervisorLoop
                 GeneralTracer.Warn("SupervisorLoop: on-crash hook timed out after 60s and was killed.");
                 return false;
             }
-            else if (process.ExitCode == 0)
+            else if (process.ExitCode != 0)
             {
-                if (process.ExitCode != 0)
-                {
-                    GeneralTracer.Warn($"SupervisorLoop: on-crash hook failed (code {process.ExitCode}).");
-                    return false;
-                }
-                GeneralTracer.Info("SupervisorLoop: on-crash hook finished (code 0).");
+                GeneralTracer.Warn($"SupervisorLoop: on-crash hook failed (code {process.ExitCode}).");
+                return false;
             }
             return true;
         }

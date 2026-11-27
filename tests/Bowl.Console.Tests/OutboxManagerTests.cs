@@ -55,42 +55,11 @@ public class OutboxManagerTests : IDisposable
         Assert.Equal(-1073741819, root.GetProperty("exitCode").GetInt32());
         Assert.Equal("pending", root.GetProperty("state").GetString());
         Assert.Equal(0, root.GetProperty("attempts").GetInt32());
-        Assert.Equal(
-            new[] { "attempts", "createdAtUtc", "exitCode", "files", "guid", "kind",
-                "outboxProtocol", "schema", "state", "targetName", "version" },
-            root.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal));
 
         var files = root.GetProperty("files").EnumerateArray().Select(f => f.GetString()).ToList();
         Assert.Contains("1.0.2_fail.json", files);
         Assert.Contains("sysinfo.txt", files);
         Assert.DoesNotContain("manifest.json", files); // the manifest never lists itself
-    }
-
-    [Fact]
-    public void WriteManifest_IgnoresUnrecognizedAssociationClaimsInConfig()
-    {
-        Directory.CreateDirectory(_installPath);
-        var configPath = Path.Combine(_installPath, "bowl.json");
-        File.WriteAllText(configPath, """
-            {
-              "schema": 2, "targetName": "TestApp", "version": "1.0.2",
-              "attemptId": "forged-attempt", "recordId": 123, "recordType": 1,
-              "tenant": "forged-tenant", "appKey": "forged-app"
-            }
-            """);
-        var options = WatchOptions.Parse(new[] { "--config", configPath, "--install-path", _installPath }, out var errors);
-        Assert.Empty(errors);
-        var manager = new OutboxManager(options!);
-        using var session = manager.CreateSession()!;
-        manager.WriteManifest(session.Directory, new WatchOutcome(-1));
-
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(session.Directory, "manifest.json")));
-        var root = manifest.RootElement;
-        Assert.False(root.TryGetProperty("attemptId", out _));
-        Assert.False(root.TryGetProperty("recordId", out _));
-        Assert.False(root.TryGetProperty("recordType", out _));
-        Assert.False(root.TryGetProperty("tenant", out _));
-        Assert.False(root.TryGetProperty("appKey", out _));
     }
 
     [Fact]

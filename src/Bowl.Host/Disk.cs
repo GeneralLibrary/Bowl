@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Security.Cryptography;
 using System.Text;
@@ -147,7 +147,6 @@ internal static class Paths
         }
         else if (request.AutoRollback)
             throw new InvalidDataException("Automatic rollback requires a snapshot directory.");
-
         if (request.CrashCollectionEnabled && !CrashCollection.SafeVersion(request.TargetVersion))
             throw new InvalidDataException("Crash collection requires a safe target version.");
 
