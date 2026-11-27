@@ -107,6 +107,12 @@ public sealed class TestSupervisorProcessTests
             File.WriteAllText(Path.Combine(root, "install", "old.txt"), "old");
             File.WriteAllText(Path.Combine(root, "stage", "old.txt"), "new");
             File.WriteAllText(Path.Combine(root, "stage", "new.txt"), "added");
+            // An elevated process creates objects owned by BUILTIN\Administrators,
+            // so pin the whole staged layout back to the current user identity.
+            foreach (var entry in new[] { "install", "backup", "stage", "state" })
+                TrustedOwner.Apply(Path.Combine(root, entry), identity.User!);
+            foreach (var entry in new[] { Path.Combine("install", "old.txt"), Path.Combine("stage", "old.txt"), Path.Combine("stage", "new.txt") })
+                TrustedOwner.Apply(Path.Combine(root, entry), identity.User!);
             using var supervisor = Start(root, "fail-after-second", true);
             try
             {

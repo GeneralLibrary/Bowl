@@ -39,6 +39,8 @@ public sealed class ControlledTreeTests
         var nested = Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "nested")).FullName;
         var file = Path.Combine(nested, "file.txt");
         File.WriteAllText(file, "content");
+        TrustedOwner.Apply(nested, user);
+        TrustedOwner.Apply(file, user);
         using (ControlledTree.HoldSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => File.Move(file, file + ".moved"));
@@ -66,6 +68,9 @@ public sealed class ControlledTreeTests
         var staged = Path.Combine(nested, "staged.txt");
         File.WriteAllText(target, "old");
         File.WriteAllText(staged, "new");
+        TrustedOwner.Apply(nested, user);
+        TrustedOwner.Apply(target, user);
+        TrustedOwner.Apply(staged, user);
         using (ControlledTree.HoldMutationSubtree(f.Request.InstallPath, new HashSet<SecurityIdentifier> { user }))
         {
             Assert.Throws<IOException>(() => Directory.Move(nested, nested + ".moved"));
