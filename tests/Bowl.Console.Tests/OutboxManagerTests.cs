@@ -4,8 +4,7 @@ using GeneralUpdate.Bowl.ConsoleApp;
 namespace Bowl.Console.Tests;
 
 /// <summary>
-///     Outbox contract tests: schema-2 manifest writing, empty-session cleanup and the disk GC
-///     rules (14-day retention, 10-cases-per-version cap, oldest-first eviction).
+///     Outbox contract tests: publication, retention and bounded admission.
 /// </summary>
 public class OutboxManagerTests : IDisposable
 {
@@ -27,7 +26,8 @@ public class OutboxManagerTests : IDisposable
     public void CreateSessionDirectory_GuidNamedUnderFailRoot()
     {
         var manager = CreateManager();
-        var session = manager.CreateSessionDirectory();
+        using var lease = manager.CreateSession()!;
+        var session = lease.Directory;
 
         Assert.True(Directory.Exists(session));
         Assert.Equal(Path.Combine(_installPath, "fail", "1.0.2"), Path.GetDirectoryName(session));
@@ -38,7 +38,8 @@ public class OutboxManagerTests : IDisposable
     public void WriteManifest_Schema2ContractShape()
     {
         var manager = CreateManager();
-        var session = manager.CreateSessionDirectory();
+        using var lease = manager.CreateSession()!;
+        var session = lease.Directory;
         File.WriteAllText(Path.Combine(session, "1.0.2_fail.json"), "{}");
         File.WriteAllText(Path.Combine(session, "sysinfo.txt"), "sys");
 
@@ -47,6 +48,7 @@ public class OutboxManagerTests : IDisposable
         var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(session, "manifest.json")));
         var root = manifest.RootElement;
         Assert.Equal(2, root.GetProperty("schema").GetInt32());
+        Assert.Equal(1, root.GetProperty("outboxProtocol").GetInt32());
         Assert.Equal(Path.GetFileName(session), root.GetProperty("guid").GetString());
         Assert.Equal("crash", root.GetProperty("kind").GetString());
         Assert.Equal("1.0.2", root.GetProperty("version").GetString());
@@ -68,7 +70,8 @@ public class OutboxManagerTests : IDisposable
         // temp file and tolerate a repeated write over an existing manifest (re-capture
         // in the same session must not fail on the rename).
         var manager = CreateManager();
-        var session = manager.CreateSessionDirectory();
+        using var lease = manager.CreateSession()!;
+        var session = lease.Directory;
         File.WriteAllText(Path.Combine(session, "1.0.2_fail.json"), "{}");
 
         manager.WriteManifest(session, new WatchOutcome(-1073741819));
@@ -85,7 +88,8 @@ public class OutboxManagerTests : IDisposable
     public void WriteManifest_UnknownExitStatusIsNull()
     {
         var manager = CreateManager();
-        var session = manager.CreateSessionDirectory();
+        using var lease = manager.CreateSession()!;
+        var session = lease.Directory;
         manager.WriteManifest(session, new WatchOutcome());
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(session, "manifest.json")));
         Assert.Equal(JsonValueKind.Null, manifest.RootElement.GetProperty("exitCode").ValueKind);
@@ -120,58 +124,56 @@ public class OutboxManagerTests : IDisposable
     {
         var manager = CreateManager();
 
-        var empty = manager.CreateSessionDirectory();
+        using var emptyLease = manager.CreateSession()!;
+        var empty = emptyLease.Directory;
         manager.RemoveSessionIfEmpty(empty);
         Assert.False(Directory.Exists(empty));
 
-        var nonEmpty = manager.CreateSessionDirectory();
+        using var nonEmptyLease = manager.CreateSession()!;
+        var nonEmpty = nonEmptyLease.Directory;
         File.WriteAllText(Path.Combine(nonEmpty, "evidence.txt"), "keep");
         manager.RemoveSessionIfEmpty(nonEmpty);
         Assert.True(Directory.Exists(nonEmpty));
     }
 
     [Fact]
-    public void CollectGarbage_RemovesCasesBeyondRetention()
+    public void CollectGarbage_PreservesOldPendingAndIncompleteCases()
     {
         var manager = CreateManager();
-        var old = manager.CreateSessionDirectory();
-        Directory.CreateDirectory(old);
+        using var oldLease = manager.CreateSession()!;
+        var old = oldLease.Directory;
         File.WriteAllText(Path.Combine(old, "manifest.json"),
             $$"""{ "schema": 2, "guid": "{{Path.GetFileName(old)}}", "createdAtUtc": "{{DateTime.UtcNow.AddDays(-20):O}}", "state": "pending" }""");
 
-        var fresh = manager.CreateSessionDirectory();
+        using var freshLease = manager.CreateSession()!;
+        var fresh = freshLease.Directory;
         File.WriteAllText(Path.Combine(fresh, "manifest.json"),
             $$"""{ "schema": 2, "guid": "{{Path.GetFileName(fresh)}}", "createdAtUtc": "{{DateTime.UtcNow.AddHours(-1):O}}", "state": "pending" }""");
 
         manager.CollectGarbage();
 
-        Assert.False(Directory.Exists(old));
+        Assert.True(Directory.Exists(old));
         Assert.True(Directory.Exists(fresh));
     }
 
     [Fact]
-    public void CollectGarbage_KeepsAtMostTenNewestCases()
+    public void Admission_PreservesExistingCasesAndStopsAtLimit()
     {
         var manager = CreateManager();
         var created = new List<string>();
-        for (var i = 0; i < 13; i++)
+        for (var i = 0; i < OutboxManager.MaxCasesPerVersion; i++)
         {
-            var session = manager.CreateSessionDirectory();
-            // Distinct manifest timestamps enforce a deterministic oldest-first order.
-            File.WriteAllText(Path.Combine(session, "manifest.json"),
-                $$"""{ "schema": 2, "createdAtUtc": "{{DateTime.UtcNow.AddMinutes(-100 + i):O}}" }""");
+            using var lease = manager.CreateSession()!;
+            var session = lease.Directory;
+            if (i % 2 == 0) File.WriteAllText(Path.Combine(session, "manifest.json"), "corrupt");
             created.Add(session);
         }
 
         manager.CollectGarbage();
-
+        Assert.Null(manager.CreateSession());
         var remaining = Directory.GetDirectories(Path.Combine(_installPath, "fail", "1.0.2"));
-        Assert.Equal(10, remaining.Length);
-        // The three oldest (lowest timestamps) were evicted.
-        Assert.DoesNotContain(created[0], remaining);
-        Assert.DoesNotContain(created[1], remaining);
-        Assert.DoesNotContain(created[2], remaining);
-        Assert.Contains(created[12], remaining);
+        Assert.Equal(OutboxManager.MaxCasesPerVersion, remaining.Length);
+        Assert.All(created, item => Assert.Contains(item, remaining));
     }
 
     [Fact]

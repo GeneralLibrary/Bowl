@@ -53,6 +53,8 @@ a separate opt-in and requires a GeneralUpdate client configured to scan the
 state-root crash outbox.
 
 See [the complete protocol and operations guide](docs/protocol-v1.md).
+The diagnostic watchdog's separate schema-2 outbox and migration requirements
+are described in [diagnostic outbox protocol 1](docs/diagnostic-outbox.md).
 
 ## Recovery and retry
 

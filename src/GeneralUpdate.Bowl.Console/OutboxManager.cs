@@ -7,30 +7,10 @@ namespace GeneralUpdate.Bowl.ConsoleApp;
 ///     Owner of the crash-evidence outbox on the Bowl side:
 ///     <c>{install}/fail/{version}/{guid}/</c> with one <c>manifest.json</c> (schema 2) per case.
 /// </summary>
-/// <remarks>
-///     <para>
-///         The disk contract with GeneralUpdate.Core (§3.2) needs zero coordination:
-///     </para>
-///     <list type="number">
-///         <item>existing means pending — the watchdog only WRITES the case directory, Core only READS it;</item>
-///         <item>uploaded means deleted — Core removes the whole directory after a successful upload;</item>
-///         <item>schema tolerance — Core skips manifests whose schema is not 2, so the two
-///             components evolve independently.</item>
-///     </list>
-///     <para>
-///         Because the watchdog is the only long-lived resident component, it also owns the disk
-///         GC (§3.3): the fail directory used to grow without bound ("EnsureDirectory must not
-///         delete"), which is safe now that retention rules are explicit — 14 days per case,
-///         10 cases per version, giveup-marked cases age out together with everything else.
-///     </para>
-/// </remarks>
 internal sealed class OutboxManager
 {
-    /// <summary>Maximum cases kept per version directory (§3.3).</summary>
     internal const int MaxCasesPerVersion = 10;
-
-    /// <summary>Maximum age of a case directory (§3.3).</summary>
-    internal static readonly TimeSpan Retention = TimeSpan.FromDays(14);
+    internal const int MaxCasesTotal = 100;
 
     private readonly WatchOptions _options;
 
@@ -48,11 +28,65 @@ internal sealed class OutboxManager
     ///     directories (or volumes) after a crash.
     /// </summary>
     /// <returns>The created directory; its name is the case GUID (server idempotency key).</returns>
-    public string CreateSessionDirectory()
+    public OutboxSession? CreateSession()
     {
-        var directory = Path.Combine(VersionRoot, Guid.NewGuid().ToString("D"));
-        Directory.CreateDirectory(directory);
-        return directory;
+        var locks = Path.Combine(FailRoot, ".locks");
+        Directory.CreateDirectory(locks);
+        using var admission = TryOpenLock(Path.Combine(locks, "admission.lock"));
+        if (admission == null)
+        {
+            GeneralTracer.Warn("OutboxManager: admission lock busy; this session will run without evidence.");
+            return null;
+        }
+
+        var versionCount = 0;
+        var totalCount = 0;
+        foreach (var version in Directory.EnumerateDirectories(FailRoot))
+        {
+            if (Path.GetFileName(version).Equals(".locks", StringComparison.OrdinalIgnoreCase)) continue;
+            var count = Directory.EnumerateDirectories(version).Count();
+            totalCount += count;
+            if (string.Equals(Path.GetFullPath(version), Path.GetFullPath(VersionRoot),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                versionCount = count;
+        }
+
+        if (versionCount >= MaxCasesPerVersion || totalCount >= MaxCasesTotal)
+        {
+            GeneralTracer.Warn($"OutboxManager: evidence capacity reached (version={versionCount}/{MaxCasesPerVersion}, total={totalCount}/{MaxCasesTotal}); this session will run without evidence.");
+            return null;
+        }
+
+        for (var i = 0; i < 256; i++)
+        {
+            var id = Guid.NewGuid().ToString("D");
+            var lease = TryOpenLock(Path.Combine(locks, id[..2] + ".lock"));
+            if (lease == null) continue;
+            var directory = Path.Combine(VersionRoot, id);
+            try
+            {
+                Directory.CreateDirectory(directory);
+                return new OutboxSession(directory, lease);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+
+        GeneralTracer.Warn("OutboxManager: no case lock available; this session will run without evidence.");
+        return null;
+    }
+
+    private static FileStream? TryOpenLock(string path)
+    {
+        try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException ex)
+        {
+            GeneralTracer.Warn($"OutboxManager: cannot acquire lock {path}: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -79,6 +113,7 @@ internal sealed class OutboxManager
             {
                 writer.WriteStartObject();
                 writer.WriteNumber("schema", WatchOptions.SupportedSchema);
+                writer.WriteNumber("outboxProtocol", 1);
                 writer.WriteString("guid", Path.GetFileName(sessionDirectory));
                 writer.WriteString("kind", "crash");
                 writer.WriteString("targetName", _options.TargetName);
@@ -125,7 +160,6 @@ internal sealed class OutboxManager
             if (!Directory.Exists(sessionDirectory)) return;
             if (Directory.EnumerateFileSystemEntries(sessionDirectory).Any()) return;
             Directory.Delete(sessionDirectory, false);
-            TryDeleteVersionRootIfEmpty();
         }
         catch (Exception ex)
         {
@@ -133,45 +167,24 @@ internal sealed class OutboxManager
         }
     }
 
-    /// <summary>
-    ///     Disk GC (§3.3): cases older than <see cref="Retention"/> are removed (giveup-marked
-    ///     ones included — Core only stops UPLOADING those, disposal stays Bowl's job), and each
-    ///     version directory keeps at most <see cref="MaxCasesPerVersion"/> newest cases.
-    ///     Every error is contained: GC must never take the watchdog down.
-    /// </summary>
+    /// <summary>Report capacity pressure without deleting unacknowledged or incomplete evidence.</summary>
     public void CollectGarbage()
     {
         try
         {
             if (!Directory.Exists(FailRoot)) return;
 
-            var now = DateTime.UtcNow;
+            var total = 0;
             foreach (var versionDir in Directory.EnumerateDirectories(FailRoot))
             {
-                var cases = Directory.EnumerateDirectories(versionDir)
-                    .Select(d => new DirectoryInfo(d))
-                    .OrderBy(d => CaseTimestamp(d, now))
-                    .ToList();
-
-                var removed = 0;
-                foreach (var caseDir in cases)
-                {
-                    var age = now - CaseTimestamp(caseDir, now);
-                    if (age <= Retention && cases.Count - removed <= MaxCasesPerVersion)
-                        continue;
-
-                    try
-                    {
-                        GeneralUpdate.Bowl.FileSystem.StorageHelper.DeleteDirectory(caseDir.FullName);
-                        removed++;
-                        GeneralTracer.Info($"OutboxManager: GC removed {caseDir.Name} ({versionDir}) age={age.TotalDays:0.#}d.");
-                    }
-                    catch (Exception ex)
-                    {
-                        GeneralTracer.Warn($"OutboxManager: GC could not remove {caseDir.FullName}: {ex.Message}");
-                    }
-                }
+                if (Path.GetFileName(versionDir).Equals(".locks", StringComparison.OrdinalIgnoreCase)) continue;
+                var count = Directory.EnumerateDirectories(versionDir).Count();
+                total += count;
+                if (count >= MaxCasesPerVersion)
+                    GeneralTracer.Warn($"OutboxManager: {versionDir} contains {count} cases; evidence is retained and new sessions may be unable to capture evidence.");
             }
+            if (total >= MaxCasesTotal)
+                GeneralTracer.Warn($"OutboxManager: outbox contains {total} cases; evidence is retained and new sessions may be unable to capture evidence.");
         }
         catch (Exception ex)
         {
@@ -211,42 +224,13 @@ internal sealed class OutboxManager
         }
     }
 
-    /// <summary>Case age anchor: the manifest timestamp when readable, the directory timestamp otherwise.</summary>
-    private static DateTime CaseTimestamp(DirectoryInfo caseDir, DateTime fallback)
-    {
-        try
-        {
-            var manifestPath = Path.Combine(caseDir.FullName, "manifest.json");
-            if (!File.Exists(manifestPath))
-                return caseDir.CreationTimeUtc;
+}
 
-            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            if (document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty("createdAtUtc", out var created) &&
-                created.ValueKind == JsonValueKind.String &&
-                DateTime.TryParse(created.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
-            {
-                return parsed.ToUniversalTime();
-            }
-        }
-        catch
-        {
-            // Corrupted manifest → fall back to the directory timestamp; GC stays functional.
-        }
+internal sealed class OutboxSession : IDisposable
+{
+    private readonly FileStream _lease;
+    public string Directory { get; }
 
-        return fallback;
-    }
-
-    private void TryDeleteVersionRootIfEmpty()
-    {
-        try
-        {
-            if (Directory.Exists(VersionRoot) && !Directory.EnumerateFileSystemEntries(VersionRoot).Any())
-                Directory.Delete(VersionRoot, false);
-        }
-        catch
-        {
-            // Cosmetic cleanup only.
-        }
-    }
+    public OutboxSession(string directory, FileStream lease) => (Directory, _lease) = (directory, lease);
+    public void Dispose() => _lease.Dispose();
 }
