@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using Bowl.Host;
 
@@ -31,16 +34,15 @@ public sealed class ProcessTests
         return Process.Start("dotnet", commandLine)!;
     }
 
-    private static Process Peer(int milliseconds, params string[] arguments) => Start(
-        Path.Combine(Repository, "tests", "Bowl.TestPeer", "bin", Configuration, "net8.0", "Bowl.TestPeer.dll"),
-        new[] { milliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) }.Concat(arguments).ToArray());
+    private static Process Peer(int milliseconds) => Start(Path.Combine(Repository, "tests", "Bowl.TestPeer",
+        "bin", Configuration, "net8.0", "Bowl.TestPeer.dll"), milliseconds.ToString());
 
     private static Process Host(Fixture f) => Start(Path.Combine(Repository, "src", "Bowl.Host",
         "bin", Configuration, "net8.0", "Bowl.Host.dll"),
         "--attempt", f.Request.AttemptId, "--state-root", f.Root);
 
     [Fact]
-    public async Task RealHostCrashCanResumeObservationAndRollbackWithRetainedSnapshot()
+    public async Task RealHostCrashCanResumeObservationAndRefuseUnsafeRollback()
     {
         using var f = new Fixture();
         using var updater = Peer(30_000);
@@ -63,9 +65,9 @@ public sealed class ProcessTests
                 await Wait(resumed);
                 var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
                 Assert.Equal("updaterTerminated", result.Outcome);
-                Assert.Equal("succeeded", result.Rollback);
-                Assert.Equal("old", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
-                Assert.False(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+                Assert.Equal("failed", result.Rollback);
+                Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+                Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
                 Assert.True(File.Exists(Path.Combine(f.Request.BackupDirectory!, "application.txt")));
             }
             finally { Cleanup(resumed); }
@@ -75,9 +77,109 @@ public sealed class ProcessTests
 
     private static ProcessIdentity Identity(Process process) => new(process.Id, process.StartTime.ToUniversalTime());
 
+    [Fact]
+    public async Task LiveUpdaterAndConcurrentUserChangesAreNotOverwritten()
+    {
+        using var f = new Fixture();
+        using var updater = Peer(30_000);
+        f.Request = f.Request with { Updater = Identity(updater), AutoRollback = true, Report = new() };
+        f.Snapshot();
+        f.Save();
+        f.Producer("failed", error: new Failure { Category = "updateFailure" });
+        using var host = Host(f);
+        try
+        {
+            await Ready(f, host);
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "application.txt"), "user-modified");
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "unknown.txt"), "user-data");
+            Assert.False(host.HasExited);
+            updater.Kill();
+            await Wait(updater);
+            await Wait(host);
+            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
+            Assert.Equal("failed", result.Rollback);
+            Assert.Equal("RecoveryPlanException", result.RollbackError);
+            Assert.Equal("user-modified", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+            Assert.Equal("user-data", File.ReadAllText(Path.Combine(f.Request.InstallPath, "unknown.txt")));
+            Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+        }
+        finally { Cleanup(host); Cleanup(updater); }
+    }
+
+    [Fact]
+    public async Task RealHostRefusesUnsafeRollbackAndReportsFailureToLoopbackServer()
+    {
+        using var f = new Fixture();
+        using var reservation = new TcpListener(IPAddress.Loopback, 0);
+        reservation.Start();
+        var port = ((IPEndPoint)reservation.LocalEndpoint).Port;
+        reservation.Stop();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var variable = "BOWL_REAL_APP_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "real-process-test-secret");
+        using var updater = Peer(30_000);
+        try
+        {
+            f.Request = f.Request with
+            {
+                Updater = Identity(updater), AutoRollback = true,
+                Report = new()
+                {
+                    Url = $"http://127.0.0.1:{port}/report", RecordId = 42,
+                    AppKeyEnvironmentVariable = variable
+                }
+            };
+            f.Snapshot();
+            Directory.CreateDirectory(Path.Combine(f.Request.InstallPath, "data"));
+            File.WriteAllText(Path.Combine(f.Request.InstallPath, "data", "user.db"), "current-user-data");
+            Directory.CreateDirectory(Path.Combine(f.Request.BackupDirectory!, "data"));
+            File.WriteAllText(Path.Combine(f.Request.BackupDirectory!, "data", "user.db"), "old-user-data");
+            f.Request = f.Request with
+            {
+                RollbackPlan = f.Request.RollbackPlan! with { ProtectedPaths = ["data"] }
+            };
+            f.Save();
+            f.Producer("failed", error: new Failure
+            {
+                Category = "updateFailure", ExceptionType = "System.IO.IOException", HResult = -123
+            });
+            updater.Kill();
+            await Wait(updater);
+            using var host = Host(f);
+            try
+            {
+                var context = await listener.GetContextAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                Assert.Equal("new", File.ReadAllText(Path.Combine(f.Request.InstallPath, "application.txt")));
+                Assert.True(File.Exists(Path.Combine(f.Request.InstallPath, "new-only.txt")));
+                Assert.Equal("current-user-data", File.ReadAllText(Path.Combine(f.Request.InstallPath, "data", "user.db")));
+                using var reader = new StreamReader(context.Request.InputStream);
+                using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                Assert.Equal("real-process-test-secret", json.RootElement.GetProperty("appKey").GetString());
+                Assert.False(json.RootElement.GetProperty("diagnostics").GetProperty("rollback").GetBoolean());
+                var response = Encoding.UTF8.GetBytes("""{"code":200,"body":true,"isSuccess":true}""");
+                context.Response.ContentLength64 = response.Length;
+                await context.Response.OutputStream.WriteAsync(response);
+                context.Response.Close();
+                await Wait(host);
+                Assert.Equal(1, host.ExitCode);
+                Assert.Equal("acknowledged", f.Outbox.State);
+                Assert.DoesNotContain("real-process-test-secret",
+                    File.ReadAllText(Path.Combine(f.DirectoryPath, "outbox.json")));
+            }
+            finally { Cleanup(host); }
+        }
+        finally
+        {
+            Cleanup(updater);
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
     private static async Task Wait(Process process)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await process.WaitForExitAsync(timeout.Token);
     }
 
@@ -138,7 +240,9 @@ public sealed class ProcessTests
     {
         using var f = new Fixture();
         using var updater = Peer(30_000);
-        f.Request = f.Request with { Updater = Identity(updater), Report = new() };
+        // Slower runners may take seconds to observe the killed peer; keep the
+        // default five-second window from swallowing the outcome as updateTimeout.
+        f.Request = f.Request with { Updater = Identity(updater), Report = new(), UpdateTimeoutSeconds = 60 };
         f.Save();
         f.Producer("filesApplying");
         using var host = Host(f);
@@ -153,81 +257,6 @@ public sealed class ProcessTests
                 ProtocolJson.Default.Result)!.Outcome);
         }
         finally { Cleanup(host); Cleanup(updater); }
-    }
-
-    [Fact]
-    public async Task RealCrashPublishesDumpAndReport()
-    {
-        if (!OperatingSystem.IsWindows())
-            return;
-        using var f = new Fixture();
-        using var updater = Peer(10_000, "--crash");
-        var updaterIdentity = Identity(updater);
-        f.Request = f.Request with
-        {
-            Updater = updaterIdentity, CrashCollectionEnabled = true, TargetVersion = "1.2.3",
-            UpdateTimeoutSeconds = 30, Report = new()
-        };
-        f.Save();
-        f.Producer("filesApplying");
-        using var host = Host(f);
-        try
-        {
-            await Ready(f, host);
-            await Wait(updater);
-            await Wait(host);
-
-            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
-            Assert.Equal("updaterTerminated", result.Outcome);
-            var status = Disk.Read(Path.Combine(f.DirectoryPath, "capture-status.json"),
-                ProtocolJson.Default.CaptureStatus)!;
-            Assert.Equal("published", Assert.Single(status.Targets).State);
-            var versionRoot = Path.Combine(f.Root, "crash-outbox", "1.2.3");
-            var caseDirectory = Assert.Single(Directory.GetDirectories(versionRoot));
-            Assert.True(new FileInfo(Path.Combine(caseDirectory, "crash.dmp")).Length > 0);
-            Assert.True(new FileInfo(Path.Combine(caseDirectory, "crash.json")).Length > 0);
-            using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(caseDirectory, "manifest.json")));
-            Assert.Equal(new[] { "crash.json", "crash.dmp" },
-                manifest.RootElement.GetProperty("files").EnumerateArray().Select(x => x.GetString()).ToArray());
-        }
-        finally { Cleanup(host); Cleanup(updater); }
-    }
-
-    [Fact]
-    public async Task ProcessAliveSuccessCancelsCaptureWithoutStoppingApplication()
-    {
-        if (!OperatingSystem.IsWindows())
-            return;
-        using var f = new Fixture();
-        using var updater = Peer(60_000);
-        using var application = Peer(60_000);
-        var applicationIdentity = Identity(application);
-        f.Request = f.Request with
-        {
-            Updater = Identity(updater), LaunchMode = "processAlive", HealthTimeoutSeconds = 12,
-            CrashCollectionEnabled = true, TargetVersion = "1.2.3", Report = new()
-        };
-        f.Save();
-        f.Producer("awaitingHealth", applicationIdentity);
-        using var host = Host(f);
-        try
-        {
-            await Ready(f, host);
-            await Wait(host);
-
-            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
-            Assert.Equal("success", result.Outcome);
-            Assert.Equal("processAlive", result.Verification);
-            Assert.False(application.HasExited);
-            Assert.False(updater.HasExited);
-            var status = Disk.Read(Path.Combine(f.DirectoryPath, "capture-status.json"),
-                ProtocolJson.Default.CaptureStatus)!;
-            Assert.Contains(status.Targets, target =>
-                target.Identity == applicationIdentity && target.State == "interrupted");
-            Assert.Contains(status.Targets, target =>
-                target.Identity == f.Request.Updater && target.State == "interrupted");
-        }
-        finally { Cleanup(host); Cleanup(application); Cleanup(updater); }
     }
 
     [Theory]

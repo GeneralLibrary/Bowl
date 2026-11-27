@@ -16,6 +16,11 @@ best-effort Windows mini-dump capture using GeneralUpdate.Bowl and the bundled
 procdump; the host never uploads crash artifacts. The diagnostic tool result
 does **not** establish application health.
 
+**Automatic restoration is currently disabled:** the Host cannot yet verify a
+safe exclusive installation fence. Failed recovery is reported explicitly and
+blocks a subsequent update until the installation and ownership state are
+repaired. Do not rely on this build for automatic rollback or restart.
+
 ## Build, test and deploy
 
 Use the .NET 10 SDK for the solution/test projects; the framework-dependent host

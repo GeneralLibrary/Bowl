@@ -50,7 +50,16 @@ internal static class ProcessRunner
         };
 
         process.EnableRaisingEvents = true;
-        process.Exited += (_, _) => tcs.TrySetResult(process.ExitCode);
+        // Process exit does not happen-before the final asynchronous output
+        // callbacks, so drain the redirected streams inside the exit handler
+        // (the parameterless WaitForExit blocks until the output pipes are
+        // flushed) before signaling completion — short-lived processes would
+        // otherwise yield an empty capture.
+        process.Exited += (_, _) =>
+        {
+            process.WaitForExit();
+            tcs.TrySetResult(process.ExitCode);
+        };
 
         if (!process.Start())
         {

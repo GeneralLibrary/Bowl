@@ -22,6 +22,7 @@ internal sealed class Fixture : IDisposable
             InstallPath = Path.Combine(Base, "install"),
             BackupDirectory = Path.Combine(Base, "install", ".backups", "snapshot"),
             LaunchMode = "filesOnly", HealthTimeoutSeconds = 1, UpdateTimeoutSeconds = 5,
+            RollbackPlan = new() { RestoreFiles = ["application.txt"], RemoveFiles = ["new-only.txt"] },
             Report = new() { Url = "http://localhost/report", RecordId = 42 }
         };
         Directory.CreateDirectory(DirectoryPath);
@@ -69,6 +70,7 @@ internal sealed class FakeProcesses : IProcesses
 internal sealed class RecordingHandler : HttpMessageHandler
 {
     public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
+    public string? ResponseBody { get; set; }
     public List<string> Bodies { get; } = [];
     public List<string> Keys { get; } = [];
     public Action? BeforeSend { get; set; }
@@ -77,6 +79,9 @@ internal sealed class RecordingHandler : HttpMessageHandler
         BeforeSend?.Invoke();
         Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
         Keys.Add(request.Headers.GetValues("Idempotency-Key").Single());
-        return new HttpResponseMessage(Status);
+        return new HttpResponseMessage(Status)
+        {
+            Content = ResponseBody == null ? null : new StringContent(ResponseBody)
+        };
     }
 }

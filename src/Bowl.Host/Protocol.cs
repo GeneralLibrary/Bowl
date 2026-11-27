@@ -32,8 +32,15 @@ internal sealed record Request : Envelope
     public int HealthTimeoutSeconds { get; init; } = 5;
     public int UpdateTimeoutSeconds { get; init; } = 600;
     public bool AutoRollback { get; init; }
-    public bool CrashCollectionEnabled { get; init; }
+    public RollbackPlan? RollbackPlan { get; init; }
     public ReportConfiguration Report { get; init; } = new();
+}
+
+internal sealed record RollbackPlan
+{
+    public string[]? RestoreFiles { get; init; }
+    public string[]? RemoveFiles { get; init; }
+    public string[] ProtectedPaths { get; init; } = [];
 }
 
 internal sealed record ReportConfiguration
@@ -41,6 +48,7 @@ internal sealed record ReportConfiguration
     public string? Url { get; init; }
     public int RecordId { get; init; }
     public int Type { get; init; } = 1;
+    public string? AppKeyEnvironmentVariable { get; init; }
     public string? CredentialEnvironmentVariable { get; init; }
 }
 
@@ -88,7 +96,17 @@ internal sealed record Result : Envelope
     public string Diagnostics { get; init; } = "metadataOnly";
 }
 
-internal sealed record LegacyPayload(int RecordId, int Status, int Type);
+internal sealed record ReportDiagnostics(
+    string Outcome, string Stage, bool? Rollback, string? RollbackError,
+    string? ExceptionType, int? HResult);
+
+internal sealed record LegacyPayload(int RecordId, int Status, int Type)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AppKey { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReportDiagnostics? Diagnostics { get; init; }
+}
 
 internal sealed record Outbox : Envelope
 {
@@ -101,13 +119,6 @@ internal sealed record Outbox : Envelope
     public string? LastError { get; init; }
 }
 
-internal sealed record CaptureStatus : Envelope
-{
-    public required CaptureTargetStatus[] Targets { get; init; }
-}
-
-internal sealed record CaptureTargetStatus(ProcessIdentity Identity, string State);
-
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = true)]
 [JsonSerializable(typeof(Request))]
@@ -116,6 +127,5 @@ internal sealed record CaptureTargetStatus(ProcessIdentity Identity, string Stat
 [JsonSerializable(typeof(Producer))]
 [JsonSerializable(typeof(Result))]
 [JsonSerializable(typeof(Outbox))]
-[JsonSerializable(typeof(CaptureStatus))]
 [JsonSerializable(typeof(LegacyPayload))]
 internal partial class ProtocolJson : JsonSerializerContext;
