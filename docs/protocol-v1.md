@@ -151,6 +151,10 @@ the updater merely because a timeout elapsed. If still alive, recovery becomes
 Resume with `--attempt` or a `--retry` sweep after the updater has exited.
 The updater must not leave independent child processes writing installation
 files. Such custom updater strategies need their own writer fencing.
+The installation lock coordinates only hosts using the same state root; it
+does not exclude a non-cooperating process. The real-process crash regression
+exercises such a writer and verifies refusal, not writer exclusion or safe
+recovery.
 
 **Automatic restoration is currently unavailable.** Bowl cannot yet verify
 exclusive ownership of the installation tree or prevent another writer from

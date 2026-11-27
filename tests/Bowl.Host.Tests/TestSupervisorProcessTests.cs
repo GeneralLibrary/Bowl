@@ -105,6 +105,7 @@ public sealed class TestSupervisorProcessTests
                 PropagationFlags.None, AccessControlType.Allow));
             new DirectoryInfo(Path.Combine(root, "install")).SetAccessControl(security);
             File.WriteAllText(Path.Combine(root, "install", "old.txt"), "old");
+            Fixture.RestrictFile(Path.Combine(root, "install", "old.txt"), identity.User!);
             File.WriteAllText(Path.Combine(root, "stage", "old.txt"), "new");
             File.WriteAllText(Path.Combine(root, "stage", "new.txt"), "added");
             // An elevated process creates objects owned by BUILTIN\Administrators,
