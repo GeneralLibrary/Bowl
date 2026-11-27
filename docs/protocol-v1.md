@@ -25,6 +25,7 @@ Each attempt uses `<state-root>\attempts\<GUID>\`:
 | `result.json` | Bowl | Durable decision and recovery journal |
 | `outbox.json` | Bowl | One stable terminal event and delivery state |
 | `host.lock` | Bowl | Exclusive attempt owner, held open |
+| `capture-status.json` | Bowl | Optional local capture status, not an update verdict |
 
 `locks\<SHA256-of-canonical-install-path>.lock` coordinates attempts for the same
 installation. Its `.owner.json` sidecar records the latest owning attempt
@@ -66,6 +67,7 @@ and staging locations). Never include it in packages or restoration scopes.
   "healthTimeoutSeconds": 5,
   "updateTimeoutSeconds": 600,
   "autoRollback": false,
+  "crashCollectionEnabled": false,
   "report": {
     "url": "https://updates.example.test/report",
     "recordId": 42,
@@ -105,6 +107,12 @@ Stages: `preparing`, `filesApplying`, `filesApplied`, `launching`,
 - Invalid/missing protocol data or inaccessible observation is
   `monitorUnavailable`, not an application failure.
 
+  `crashCollectionEnabled` defaults to false. When true, `targetVersion` must be a
+  nonempty safe single directory name (at most 128 characters; no separators,
+  control characters, Windows reserved characters or device names, or trailing
+  space/dot). Invalid configuration is rejected before readiness. Collection and
+  upload must be separately authorized; enabling supervision alone does neither.
+
 `processAlive` means process survival, **not business health**. No `health.json`
 signal is part of v1. No dump is ever used as success evidence.
 
@@ -122,7 +130,7 @@ signal is part of v1. No dump is ever used as success evidence.
 | `currentVersion`, `targetVersion` | Copied immutable request versions |
 | `observedAtUtc` | Decision timestamp |
 | `error` | Original structured producer failure, or monitoring exception type |
-| `diagnostics` | `metadataOnly`; no implicit dump/system-information capture |
+| `diagnostics` | `metadataOnly`; describes this result record, not the separate opt-in crash outbox |
 | `rollback` | `notRequested`, `pending`, `inProgress`, `deferred`, `succeeded`, `failed` |
 | `rollbackError` | Bounded error classification, never credentials or response body |
 
@@ -180,7 +188,7 @@ Only after recovery settles does Bowl create `outbox.json`:
 `monitorUnavailable` are local-only, never fake network acknowledgements.
 The HTTP JSON shape is exactly `recordId`, `status`, `type`; status remains
 2 Success / 3 Failure, type remains 1 poll / 2 push. Structured diagnostics and
-dumps are never uploaded. `Idempotency-Key` carries the stable event ID; a
+dumps are never uploaded by this HTTP outbox. `Idempotency-Key` carries the stable event ID; a
 legacy server can ignore it, so delivery is **at least once**, not exactly once.
 
 Each invocation sends at most once per eligible attempt. Before sending, persist
@@ -216,9 +224,48 @@ fragment. Never put secrets on the command line, in a URL or in the request.
 Provision host credentials separately; Update's in-process HTTP callbacks
 cannot cross the process boundary.
 
-Protect local paths, stack traces and binaries with ACLs. The existing diagnostic
-library and bundled procdump tools are a separate explicit opt-in, not a host
-startup dependency. No full dump upload option is enabled by this protocol.
+## Optional crash evidence
+
+Only when `crashCollectionEnabled` is true, the Windows host asks the bundled
+GeneralUpdate.Bowl procdump strategy to attach to the exact updater identity and,
+once available, the exact application identity. It checks PID and start time
+and holds a process handle, never searches by name. Capture is best-effort:
+attach can miss a fast exit, require permissions or a previously accepted tool
+license, or fail because the tool is unavailable. The host monitors only the
+v1 update and startup-survival window, not the application's later lifetime.
+Other platforms explicitly report capture unavailable. A missing dump is not
+proof of health, a crash or a failed update. No system-info export, automatic
+restore or crash hook is run by the diagnostic library.
+
+A successful, nonempty **mini dump** and GeneralUpdate.Bowl crash report are
+flushed into a staging directory beneath
+`<state-root>\crash-outbox\<targetVersion>`; a schema 2 manifest is written
+last, then the whole directory is atomically renamed to a new canonical GUID.
+The manifest has `schema`, `guid`, `kind:"crash"`, `targetName`, `version`,
+`exitCode:null`, `createdAtUtc`, `files:["crash.json","crash.dmp"]`,
+`state:"pending"` and `attempts:0`. No case is published without both complete
+files. Core Client owns uploading, retries and acknowledged-case deletion;
+the host neither uploads nor mutates a published case. The state root is outside
+the installation and backup trees, so rollback cannot erase pending cases.
+
+The attempt's `capture-status.json` records per-target `capturing`, `published`,
+`noDump`, `unavailable` or `interrupted`. `noDump` does not distinguish a normal
+exit from tool failure. Capture errors are also logged to stderr and
+never change the v1 outcome or rollback. The host waits at most three seconds
+for evidence after a failed observation, then sends a console interrupt to each
+owned ProcDump so it can detach without terminating the monitored process; an owned
+Windows job closes them if the host exits. An abrupt host exit or failed graceful
+detach can therefore terminate a process that ProcDump is debugging. A crash or failure before publication
+can leave a non-GUID `.partial` directory: it is not scanned or automatically
+retried or deleted. Operators must inspect it and securely remove or archive it;
+restarting an already completed attempt cannot recreate an unattached dump.
+Published cases remain pending until Client succeeds; configure and monitor
+Client's retry schedule and disk capacity. No host GC evicts pending evidence.
+
+Mini dumps and crash reports can contain sensitive memory, paths and process
+details. Protect the entire state root with restrictive ACLs, provision enough
+disk space, and disclose both collection and Client upload to the operator.
+These guarantees assume trusted local writers and atomic rename on local storage.
 
 For `--attempt`, exit 0 means supervised application/file success; exit 1 means
 a recorded non-success; exit 2 means invocation/ownership/storage failure or

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -30,8 +31,9 @@ public sealed class ProcessTests
         return Process.Start("dotnet", commandLine)!;
     }
 
-    private static Process Peer(int milliseconds) => Start(Path.Combine(Repository, "tests", "Bowl.TestPeer",
-        "bin", Configuration, "net8.0", "Bowl.TestPeer.dll"), milliseconds.ToString());
+    private static Process Peer(int milliseconds, params string[] arguments) => Start(
+        Path.Combine(Repository, "tests", "Bowl.TestPeer", "bin", Configuration, "net8.0", "Bowl.TestPeer.dll"),
+        new[] { milliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) }.Concat(arguments).ToArray());
 
     private static Process Host(Fixture f) => Start(Path.Combine(Repository, "src", "Bowl.Host",
         "bin", Configuration, "net8.0", "Bowl.Host.dll"),
@@ -75,7 +77,7 @@ public sealed class ProcessTests
 
     private static async Task Wait(Process process)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await process.WaitForExitAsync(timeout.Token);
     }
 
@@ -151,6 +153,81 @@ public sealed class ProcessTests
                 ProtocolJson.Default.Result)!.Outcome);
         }
         finally { Cleanup(host); Cleanup(updater); }
+    }
+
+    [Fact]
+    public async Task RealCrashPublishesDumpAndReport()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var f = new Fixture();
+        using var updater = Peer(10_000, "--crash");
+        var updaterIdentity = Identity(updater);
+        f.Request = f.Request with
+        {
+            Updater = updaterIdentity, CrashCollectionEnabled = true, TargetVersion = "1.2.3",
+            UpdateTimeoutSeconds = 30, Report = new()
+        };
+        f.Save();
+        f.Producer("filesApplying");
+        using var host = Host(f);
+        try
+        {
+            await Ready(f, host);
+            await Wait(updater);
+            await Wait(host);
+
+            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
+            Assert.Equal("updaterTerminated", result.Outcome);
+            var status = Disk.Read(Path.Combine(f.DirectoryPath, "capture-status.json"),
+                ProtocolJson.Default.CaptureStatus)!;
+            Assert.Equal("published", Assert.Single(status.Targets).State);
+            var versionRoot = Path.Combine(f.Root, "crash-outbox", "1.2.3");
+            var caseDirectory = Assert.Single(Directory.GetDirectories(versionRoot));
+            Assert.True(new FileInfo(Path.Combine(caseDirectory, "crash.dmp")).Length > 0);
+            Assert.True(new FileInfo(Path.Combine(caseDirectory, "crash.json")).Length > 0);
+            using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(caseDirectory, "manifest.json")));
+            Assert.Equal(new[] { "crash.json", "crash.dmp" },
+                manifest.RootElement.GetProperty("files").EnumerateArray().Select(x => x.GetString()).ToArray());
+        }
+        finally { Cleanup(host); Cleanup(updater); }
+    }
+
+    [Fact]
+    public async Task ProcessAliveSuccessCancelsCaptureWithoutStoppingApplication()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var f = new Fixture();
+        using var updater = Peer(60_000);
+        using var application = Peer(60_000);
+        var applicationIdentity = Identity(application);
+        f.Request = f.Request with
+        {
+            Updater = Identity(updater), LaunchMode = "processAlive", HealthTimeoutSeconds = 12,
+            CrashCollectionEnabled = true, TargetVersion = "1.2.3", Report = new()
+        };
+        f.Save();
+        f.Producer("awaitingHealth", applicationIdentity);
+        using var host = Host(f);
+        try
+        {
+            await Ready(f, host);
+            await Wait(host);
+
+            var result = Disk.Read(Path.Combine(f.DirectoryPath, "result.json"), ProtocolJson.Default.Result)!;
+            Assert.Equal("success", result.Outcome);
+            Assert.Equal("processAlive", result.Verification);
+            Assert.False(application.HasExited);
+            Assert.False(updater.HasExited);
+            var status = Disk.Read(Path.Combine(f.DirectoryPath, "capture-status.json"),
+                ProtocolJson.Default.CaptureStatus)!;
+            Assert.Contains(status.Targets, target =>
+                target.Identity == applicationIdentity && target.State == "interrupted");
+            Assert.Contains(status.Targets, target =>
+                target.Identity == f.Request.Updater && target.State == "interrupted");
+        }
+        finally { Cleanup(host); Cleanup(application); Cleanup(updater); }
     }
 
     [Theory]

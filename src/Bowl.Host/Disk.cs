@@ -148,6 +148,9 @@ internal static class Paths
         else if (request.AutoRollback)
             throw new InvalidDataException("Automatic rollback requires a snapshot directory.");
 
+        if (request.CrashCollectionEnabled && !CrashCollection.SafeVersion(request.TargetVersion))
+            throw new InvalidDataException("Crash collection requires a safe target version.");
+
         if (request.Updater is null || request.Updater.Pid <= 0 ||
             request.Updater.StartTimeUtc == default || request.CreatedAtUtc == default ||
             request.CreatedAtUtc > DateTimeOffset.UtcNow.AddMinutes(5) ||

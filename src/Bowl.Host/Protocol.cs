@@ -32,6 +32,7 @@ internal sealed record Request : Envelope
     public int HealthTimeoutSeconds { get; init; } = 5;
     public int UpdateTimeoutSeconds { get; init; } = 600;
     public bool AutoRollback { get; init; }
+    public bool CrashCollectionEnabled { get; init; }
     public ReportConfiguration Report { get; init; } = new();
 }
 
@@ -100,6 +101,13 @@ internal sealed record Outbox : Envelope
     public string? LastError { get; init; }
 }
 
+internal sealed record CaptureStatus : Envelope
+{
+    public required CaptureTargetStatus[] Targets { get; init; }
+}
+
+internal sealed record CaptureTargetStatus(ProcessIdentity Identity, string State);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = true)]
 [JsonSerializable(typeof(Request))]
@@ -108,5 +116,6 @@ internal sealed record Outbox : Envelope
 [JsonSerializable(typeof(Producer))]
 [JsonSerializable(typeof(Result))]
 [JsonSerializable(typeof(Outbox))]
+[JsonSerializable(typeof(CaptureStatus))]
 [JsonSerializable(typeof(LegacyPayload))]
 internal partial class ProtocolJson : JsonSerializerContext;

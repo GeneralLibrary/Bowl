@@ -11,6 +11,7 @@
     <RepositoryUrl>https://github.com/GeneralLibrary/Bowl</RepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\GeneralUpdate.Bowl\GeneralUpdate.Bowl.csproj" />
     <InternalsVisibleTo Include="Bowl.Host.Tests" />
     <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
