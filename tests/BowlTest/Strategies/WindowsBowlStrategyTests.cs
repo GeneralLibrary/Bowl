@@ -272,9 +272,9 @@ public class WindowsBowlStrategyTests
             finally
             {
                 if (originalBytes != null)
-                    File.WriteAllBytes(baseDirFile, originalBytes);
+                    WriteBytesWithRetry(baseDirFile, originalBytes);
                 else if (File.Exists(baseDirFile))
-                    File.Delete(baseDirFile);
+                    DeleteWithRetry(baseDirFile);
                 try { Directory.Delete(targetRoot, recursive: true); } catch { /* best effort */ }
             }
         }
@@ -283,16 +283,37 @@ public class WindowsBowlStrategyTests
     /// <summary>
     ///     写入假 MZ 头文件：杀软实时扫描会短暂占用刚落盘的可执行文件，写入需重试。
     /// </summary>
-    private static void WriteStubExecutable(string path)
+    private static void WriteStubExecutable(string path) =>
+        WriteBytesWithRetry(path, new byte[] { 0x4D, 0x5A });
+
+    private const int ExecutableLockAttempts = 9;
+
+    private static void WriteBytesWithRetry(string path, byte[] bytes)
     {
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                File.WriteAllBytes(path, new byte[] { 0x4D, 0x5A });
+                File.WriteAllBytes(path, bytes);
                 return;
             }
-            catch (IOException) when (attempt < 4)
+            catch (IOException) when (attempt < ExecutableLockAttempts)
+            {
+                Thread.Sleep(250);
+            }
+        }
+    }
+
+    private static void DeleteWithRetry(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (Exception ex) when (attempt < ExecutableLockAttempts && ex is IOException or UnauthorizedAccessException)
             {
                 Thread.Sleep(250);
             }
