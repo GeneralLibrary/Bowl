@@ -212,8 +212,10 @@ internal static class ControlledTree
                     throw new InvalidDataException("Invalid security descriptor.");
                 var bytes = new byte[length];
                 Marshal.Copy(descriptor, bytes, 0, bytes.Length);
-                if (!ControlledAcl.IsRestricted(new RawSecurityDescriptor(bytes, 0), trusted))
-                    throw new InvalidDataException("Untrusted filesystem permissions.");
+                var raw = new RawSecurityDescriptor(bytes, 0);
+                if (!ControlledAcl.IsRestricted(raw, trusted))
+                    throw new InvalidDataException(
+                        $"Untrusted filesystem permissions for '{path}': {ControlledAcl.DescribeRejection(raw, trusted)}.");
             }
             finally { LocalFree(descriptor); }
             return handle;
