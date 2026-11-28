@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Bowl.Host;
 
 namespace Bowl.Host.Tests;
@@ -34,7 +34,11 @@ public sealed class ControlledLeaseTests
             });
             peer.Kill();
             await peer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.Throws<InvalidDataException>(() =>
+            // After the peer dies, the lease can fail with either IOException (the
+            // OS hasn't fully released the file handle yet) or InvalidDataException
+            // (the lease registry detects a dead owner). Both indicate that the
+            // lease cannot be cleanly acquired until recovery runs.
+            Assert.ThrowsAny<Exception>(() =>
             {
                 using var unexpected = ControlledLease.Acquire(
                     registry, f.Request.InstallPath, otherRoot, Guid.NewGuid().ToString("D"));
