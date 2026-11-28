@@ -5,6 +5,10 @@ using GeneralUpdate.Bowl.Strategies;
 
 namespace Bowl.Console.Tests;
 
+[CollectionDefinition("Hook environment", DisableParallelization = true)]
+public class HookEnvironmentCollection { }
+
+[Collection("Hook environment")]
 public class WatcherTests
 {
     [Fact]
@@ -66,7 +70,7 @@ public class WatcherTests
     [Fact]
     public async Task Hooks_UseIndependentEnvironmentsWithoutChangingParentDirectory()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"bowl-hooks-{Guid.NewGuid():N}");
+        var root = Path.Combine(Path.GetTempPath(), $"bowl hooks & {Guid.NewGuid():N}");
         var first = Path.Combine(root, "first");
         var second = Path.Combine(root, "second");
         Directory.CreateDirectory(first);
@@ -77,8 +81,10 @@ public class WatcherTests
                 ? "@echo off\r\nsetlocal EnableDelayedExpansion\r\necho !BOWL_EVIDENCE_DIRECTORY!>\"!BOWL_EVIDENCE_DIRECTORY!\\result.txt\"\r\n"
                 : "printf '%s\\n' \"$BOWL_EVIDENCE_DIRECTORY\" > \"$BOWL_EVIDENCE_DIRECTORY/result.txt\"\n");
         var current = Environment.CurrentDirectory;
+        var originalSearchSetting = Environment.GetEnvironmentVariable("NoDefaultCurrentDirectoryInExePath");
         try
         {
+            if (windows) Environment.SetEnvironmentVariable("NoDefaultCurrentDirectoryInExePath", "1");
             await Task.WhenAll(
                 Task.Run(() => SupervisorLoop.RunOnCrashHook(first, "enabled", root)),
                 Task.Run(() => SupervisorLoop.RunOnCrashHook(second, "enabled", root)));
@@ -89,6 +95,7 @@ public class WatcherTests
         }
         finally
         {
+            if (windows) Environment.SetEnvironmentVariable("NoDefaultCurrentDirectoryInExePath", originalSearchSetting);
             Directory.Delete(root, recursive: true);
         }
     }

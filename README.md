@@ -51,6 +51,8 @@ the updater aborts before file modification. No dump is required to detect an
 abnormally terminated updater or failed application startup.
 
 See [the complete protocol and operations guide](docs/protocol-v1.md).
+The diagnostic watchdog's separate schema-2 outbox and migration requirements
+are described in [diagnostic outbox protocol 1](docs/diagnostic-outbox.md).
 
 ## Recovery and retry
 

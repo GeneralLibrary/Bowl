@@ -33,6 +33,7 @@ Intentional edits to imported files:
 | `src\GeneralUpdate.Bowl\BowlResult.cs` | Clarify legacy tool result is not application health |
 | `src\GeneralUpdate.Bowl\BowlContext.cs` | `Normalize()` default work model is now `"Normal"` — recovery semantics (`Upgrade` + `AutoRestore`) are an explicit opt-in; the restore decision belongs to the update pipeline (Core RollbackManager) |
 | `src\GeneralUpdate.Bowl\Strategies\StrategyFactory.cs` | Added `CreateWithFallback(out WatcherTier)` three-tier watcher probing (procdump → runtime createdump → exit-code fallback) for the console supervisor; `Create()` and the embedded single-shot API are unchanged |
+| `src\GeneralUpdate.Bowl\Strategies\ProcessRunner.cs` | Wait for stdout and stderr to drain before returning captured output, subject to the existing timeout and cancellation |
 | `src\GeneralUpdate.Bowl\Strategies\WindowsBowlStrategy.cs` | Resolve procdump from the watchdog directory before the target installation |
 | `src\GeneralUpdate.Bowl\Applications\Windows\export.bat` | Accept the evidence directory via a per-process environment variable or manual argument |
 | `src\GeneralUpdate.Bowl\Internal\WindowsSystemInfoProvider.cs` | Launch export with a child-specific working directory and environment |
@@ -42,7 +43,7 @@ Intentional edits to imported files:
 | `tests\BowlTest\BowlContextTests.cs` | Follow the `Normalize()` default change: empty/null `WorkModel` now normalizes to `"Normal"` |
 | `tests\BowlTest\Strategies\BowlContextTests.cs` | Follow the `Normalize()` default change (default work model assertion) |
 | `tests\BowlTest\Integration\BowlIntegrationTests.cs` | Follow the `Normalize()` default change (default work model assertion) |
-| `tests\BowlTest\BowlTests.cs`, `tests\BowlTest\Integration\BowlCrashPipelineTests.cs`, `tests\BowlTest\Strategies\ProcessRunnerTests.cs` | Use platform-aware process fixtures |
+| `tests\BowlTest\BowlTests.cs`, `tests\BowlTest\Integration\BowlCrashPipelineTests.cs`, `tests\BowlTest\Strategies\ProcessRunnerTests.cs` | Use platform-aware process fixtures; verify concurrent stdout and stderr capture before process results are returned |
 | `tests\BowlTest\Strategies\WindowsBowlStrategyTests.cs` | Test procdump resolution and preserve any bundled executable fixture |
 
 New files added alongside the import (not part of the 61 migrated entries):

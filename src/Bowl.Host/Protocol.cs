@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
 
 namespace Bowl.Host;
@@ -33,6 +33,7 @@ internal sealed record Request : Envelope
     public int UpdateTimeoutSeconds { get; init; } = 600;
     public bool AutoRollback { get; init; }
     public RollbackPlan? RollbackPlan { get; init; }
+    public bool CrashCollectionEnabled { get; init; }
     public ReportConfiguration Report { get; init; } = new();
 }
 
@@ -100,6 +101,13 @@ internal sealed record ReportDiagnostics(
     string Outcome, string Stage, bool? Rollback, string? RollbackError,
     string? ExceptionType, int? HResult);
 
+internal sealed record CaptureStatus : Envelope
+{
+    public required CaptureTargetStatus[] Targets { get; init; }
+}
+
+internal sealed record CaptureTargetStatus(ProcessIdentity Identity, string State);
+
 internal sealed record LegacyPayload(int RecordId, int Status, int Type)
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -127,5 +135,6 @@ internal sealed record Outbox : Envelope
 [JsonSerializable(typeof(Producer))]
 [JsonSerializable(typeof(Result))]
 [JsonSerializable(typeof(Outbox))]
+[JsonSerializable(typeof(CaptureStatus))]
 [JsonSerializable(typeof(LegacyPayload))]
 internal partial class ProtocolJson : JsonSerializerContext;

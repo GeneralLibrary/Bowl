@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\GeneralUpdate.Bowl.Console\GeneralUpdate.Bowl.Console.csproj" />
+    <ProjectReference Include="..\Bowl.TestPeer\Bowl.TestPeer.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>
